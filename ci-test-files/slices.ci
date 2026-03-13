@@ -1,0 +1,33 @@
+using stdio;
+
+public main() {
+    // Array to slice
+    let arr: [int; 5] = [10, 20, 30, 40, 50];
+    let s: []int = arr[0..5];
+
+    // Slice length
+    printf(c"len = %d\n", s.len);
+
+    // Index into slice
+    printf(c"s[0] = %d\n", s[0]);
+    printf(c"s[2] = %d\n", s[2]);
+
+    // Slice of slice
+    let s2: []int = s[1..3];
+    printf(c"s2.len = %d\n", s2.len);
+    printf(c"s2[0] = %d\n", s2[0]);
+
+    // Iterate over slice
+    for i in 0..s.len {
+        printf(c"s[%d] = %d\n", i, s[i]);
+    }
+
+    // String slice
+    let words: [str; 3] = ["hello", "ciren", "world"];
+    let ws: []str = words[0..3];
+    for i in 0..ws.len {
+        printf(c"%s\n", ws[i]);
+    }
+
+    return 0;
+}

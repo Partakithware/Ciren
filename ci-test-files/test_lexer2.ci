@@ -1,0 +1,10 @@
+using stdio;
+using memory;
+
+public main() {
+    let buf: *int = malloc(64) as *int;
+    let x: int = 42;
+    printf(c"x = %d\n", x);
+    free(buf);
+    return 0;
+}

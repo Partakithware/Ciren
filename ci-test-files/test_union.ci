@@ -1,0 +1,16 @@
+using stdio;
+
+public union Value {
+    i: int,
+    f: f64,
+    p: *int,
+}
+
+public main() {
+    let v: Value = Value { i: 42, f: 0.0, p: null };
+    v.i = 100;
+    printf(c"v.i = %d\n", v.i);
+    v.f = 3.14;
+    printf(c"v.f = %f\n", v.f);
+    return 0;
+}

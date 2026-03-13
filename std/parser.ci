@@ -1,0 +1,1438 @@
+module parser;
+using stdio;
+using memory;
+using string;
+using lexer;
+using ast;
+
+// ─── PARSER STRUCT ────────────────────────────────────────────────────────────
+
+public struct Parser {
+    lx:            *Lexer,
+    arena:         *Arena,
+    current:       Token,
+    previous:      Token,
+    had_error:     int,
+    panic_mode:    int,
+    no_struct_lit: int,
+    filename:      cstr,
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+private void p_error_at(p: *Parser, t: Token, msg: cstr) {
+    if (*p).panic_mode == 1 { return; }
+    (*p).panic_mode = 1;
+    (*p).had_error  = 1;
+    fprintf(stderr, c"[%s:%d:%d] error: %s", (*p).filename, t.line, t.col, msg);
+    if t.kind == TOK_EOF { fprintf(stderr, c" (at end of file)"); }
+    fprintf(stderr, c"\n");
+}
+
+private void p_error(p: *Parser, msg: cstr) {
+    p_error_at(p, (*p).current, msg);
+}
+
+private Token p_advance(p: *Parser) {
+    (*p).previous = (*p).current;
+    (*p).current  = lexer_next((*p).lx);
+    if (*p).current.kind == TOK_ERROR { p_error(p, c"unexpected token"); }
+    return (*p).previous;
+}
+
+private int p_check(p: *Parser, kind: int) {
+    return (*p).current.kind == kind;
+}
+
+private int p_match(p: *Parser, kind: int) {
+    if p_check(p, kind) == 0 { return 0; }
+    p_advance(p);
+    return 1;
+}
+
+private Token p_expect(p: *Parser, kind: int, msg: cstr) {
+    if p_check(p, kind) == 0 { p_error(p, msg); return (*p).current; }
+    return p_advance(p);
+}
+
+// Copy Token text (int-per-char) into arena as null-terminated *int string
+private *int tok_dup(p: *Parser, t: Token) {
+    let n: int = t.len;
+    let buf: *int = arena_alloc((*p).arena, (n + 1) * 8) as *int;
+    let i: int = 0;
+    while i < n {
+        *(buf + i) = *(t.start + i);
+        i = i + 1;
+    }
+    *(buf + n) = 0;
+    return buf;
+}
+
+// Compare a *int string (len chars) against a cstr literal
+private int intstr_eq(s: *int, n: int, lit: cstr) {
+    let i: int = 0;
+    while i < n {
+        if *(s + i) != *(lit as *int + i) { return 0; }
+        i = i + 1;
+    }
+    return *(lit as *int + n) == 0;
+}
+
+private void p_sync(p: *Parser) {
+    (*p).panic_mode = 0;
+    while p_check(p, TOK_EOF) == 0 {
+        if (*p).previous.kind == TOK_RBRACE { return; }
+        let k: int = (*p).current.kind;
+        if k == TOK_PUBLIC    { return; }
+        if k == TOK_PRIVATE   { return; }
+        if k == TOK_INTERNAL  { return; }
+        if k == TOK_USING     { return; }
+        if k == TOK_UNION     { return; }
+        if k == TOK_STRUCT    { return; }
+        if k == TOK_ENUM      { return; }
+        if k == TOK_INTERFACE { return; }
+        if k == TOK_RETURN    { return; }
+        p_advance(p);
+    }
+}
+
+// ─── INIT ──────────────────────────────────────────────────────────────────────
+
+public *Parser parser_create(lx: *Lexer, arena: *Arena, filename: cstr) {
+    let p: *Parser = arena_alloc(arena, 320) as *Parser;
+    (*p).lx            = lx;
+    (*p).arena         = arena;
+    (*p).had_error     = 0;
+    (*p).panic_mode    = 0;
+    (*p).no_struct_lit = 0;
+    (*p).filename      = filename;
+    (*p).current       = lexer_next(lx);
+    return p;
+}
+
+// ─── FORWARD DECLARATIONS ────────────────────────────────────────────────────
+
+private *AstNode parse_stmt(p: *Parser);
+private *AstNode parse_expr(p: *Parser);
+private *AstNode parse_block(p: *Parser);
+private *AstType parse_type(p: *Parser);
+private *AstNode parse_decl(p: *Parser);
+private *AstNode parse_expr_prec(p: *Parser, min_prec: int);
+private *AstNode parse_func_decl(p: *Parser, access: int, ret: *AstType, name: *int);
+private *AstNode parse_impl_decl(p: *Parser);
+private *AstNode parse_interface_decl(p: *Parser, access: int);
+
+// ─── TYPE PARSER ──────────────────────────────────────────────────────────────
+
+private *AstType parse_type(p: *Parser) {
+    let t: *AstType = type_alloc((*p).arena, TK_INFERRED);
+
+    // ?* nullable pointer
+    let nullable: int = 0;
+    if p_match(p, TOK_QUESTION) == 1 { nullable = 1; }
+
+    // * pointer
+    if p_match(p, TOK_STAR) == 1 {
+        if nullable == 1 { (*t).kind = TK_NULLABLE_PTR; }
+        else             { (*t).kind = TK_POINTER; }
+        (*t).inner = parse_type(p);
+        return t;
+    }
+
+    // [] slice  or  [T; N] array
+    if p_match(p, TOK_LBRACKET) == 1 {
+        if p_match(p, TOK_RBRACKET) == 1 {
+            (*t).kind  = TK_SLICE;
+            (*t).inner = parse_type(p);
+            return t;
+        }
+        (*t).kind      = TK_ARRAY;
+        (*t).elem_type = parse_type(p);
+        p_expect(p, TOK_SEMICOLON, c"expected ';' in array type");
+        (*t).array_size = parse_expr(p);
+        p_expect(p, TOK_RBRACKET, c"expected ']' after array size");
+        return t;
+    }
+
+    // (A, B) -> R  function pointer
+    if p_match(p, TOK_LPAREN) == 1 {
+        (*t).kind = TK_FUNC_PTR;
+        let cap:   int = 4;
+        let count: int = 0;
+        let ptypes: *int = arena_alloc((*p).arena, cap * 8) as *int;
+        if p_check(p, TOK_RPAREN) == 0 {
+            let running: int = 1;
+            while running == 1 {
+                if count >= cap {
+                    let nc: int = cap * 2;
+                    let np: *int = arena_alloc((*p).arena, nc * 8) as *int;
+                    let ci: int = 0;
+                    while ci < count { *(np + ci) = *(ptypes + ci); ci = ci + 1; }
+                    ptypes = np;
+                    cap = nc;
+                }
+                *(ptypes + count) = parse_type(p) as int;
+                count = count + 1;
+                if p_match(p, TOK_COMMA) == 0 { running = 0; }
+            }
+        }
+        p_expect(p, TOK_RPAREN, c"expected ')' in function pointer type");
+        p_expect(p, TOK_ARROW,  c"expected '->' in function pointer type");
+        (*t).param_types = ptypes;
+        (*t).param_count = count;
+        (*t).return_type = parse_type(p);
+        return t;
+    }
+
+    // Primitive types
+    let k: int = (*p).current.kind;
+    if k == TOK_TYPE_INT  { (*t).kind = TK_INT;  p_advance(p); return t; }
+    if k == TOK_TYPE_UINT { (*t).kind = TK_UINT; p_advance(p); return t; }
+    if k == TOK_TYPE_I8   { (*t).kind = TK_I8;   p_advance(p); return t; }
+    if k == TOK_TYPE_U8   { (*t).kind = TK_U8;   p_advance(p); return t; }
+    if k == TOK_TYPE_I16  { (*t).kind = TK_I16;  p_advance(p); return t; }
+    if k == TOK_TYPE_U16  { (*t).kind = TK_U16;  p_advance(p); return t; }
+    if k == TOK_TYPE_I64  { (*t).kind = TK_I64;  p_advance(p); return t; }
+    if k == TOK_TYPE_U64  { (*t).kind = TK_U64;  p_advance(p); return t; }
+    if k == TOK_TYPE_F32  { (*t).kind = TK_F32;  p_advance(p); return t; }
+    if k == TOK_TYPE_F64  { (*t).kind = TK_F64;  p_advance(p); return t; }
+    if k == TOK_TYPE_BOOL { (*t).kind = TK_BOOL; p_advance(p); return t; }
+    if k == TOK_TYPE_CHAR { (*t).kind = TK_CHAR; p_advance(p); return t; }
+    if k == TOK_TYPE_STR  { (*t).kind = TK_STR;  p_advance(p); return t; }
+    if k == TOK_TYPE_CSTR { (*t).kind = TK_CSTR; p_advance(p); return t; }
+    if k == TOK_TYPE_VOID { (*t).kind = TK_VOID; p_advance(p); return t; }
+    if k == TOK_TYPE_ANY  { (*t).kind = TK_ANY;  p_advance(p); return t; }
+    if k == TOK_SELF {
+        (*t).kind = TK_NAMED;
+        (*t).name = tok_dup(p, (*p).current);
+        p_advance(p);
+        return t;
+    }
+
+    // Named / generic: MyType or MyType<A, B>
+    if k == TOK_IDENT {
+        (*t).kind = TK_NAMED;
+        (*t).name = tok_dup(p, (*p).current);
+        p_advance(p);
+        if p_match(p, TOK_LT) == 1 {
+            (*t).kind = TK_GENERIC;
+            let cap:   int = 4;
+            let count: int = 0;
+            let ta: *int = arena_alloc((*p).arena, cap * 8) as *int;
+            let running: int = 1;
+            while running == 1 {
+                *(ta + count) = parse_type(p) as int;
+                count = count + 1;
+                if p_match(p, TOK_COMMA) == 0 { running = 0; }
+            }
+            p_expect(p, TOK_GT, c"expected '>' after generic type args");
+            (*t).type_args      = ta;
+            (*t).type_arg_count = count;
+        }
+        return t;
+    }
+
+    p_error(p, c"expected type");
+    return t;
+}
+
+// ─── EXPRESSION PARSER (Pratt) ────────────────────────────────────────────────
+
+private const PREC_NONE:    int = 0;
+private const PREC_ASSIGN:  int = 1;
+private const PREC_OR:      int = 2;
+private const PREC_AND:     int = 3;
+private const PREC_EQ:      int = 4;
+private const PREC_CMP:     int = 5;
+private const PREC_RANGE:   int = 6;
+private const PREC_BIT_OR:  int = 7;
+private const PREC_BIT_XOR: int = 8;
+private const PREC_BIT_AND: int = 9;
+private const PREC_SHIFT:   int = 10;
+private const PREC_TERM:    int = 11;
+private const PREC_FACTOR:  int = 12;
+private const PREC_UNARY:   int = 13;
+private const PREC_POSTFIX: int = 14;
+
+private int token_prec(kind: int) {
+    if kind == TOK_ASSIGN        { return PREC_ASSIGN; }
+    if kind == TOK_PLUS_ASSIGN   { return PREC_ASSIGN; }
+    if kind == TOK_MINUS_ASSIGN  { return PREC_ASSIGN; }
+    if kind == TOK_STAR_ASSIGN   { return PREC_ASSIGN; }
+    if kind == TOK_SLASH_ASSIGN  { return PREC_ASSIGN; }
+    if kind == TOK_OR            { return PREC_OR; }
+    if kind == TOK_AND           { return PREC_AND; }
+    if kind == TOK_EQ            { return PREC_EQ; }
+    if kind == TOK_NEQ           { return PREC_EQ; }
+    if kind == TOK_LT            { return PREC_CMP; }
+    if kind == TOK_GT            { return PREC_CMP; }
+    if kind == TOK_LTE           { return PREC_CMP; }
+    if kind == TOK_GTE           { return PREC_CMP; }
+    if kind == TOK_DOTDOT        { return PREC_RANGE; }
+    if kind == TOK_DOTDOT_EQ     { return PREC_RANGE; }
+    if kind == TOK_PIPE          { return PREC_BIT_OR; }
+    if kind == TOK_CARET         { return PREC_BIT_XOR; }
+    if kind == TOK_AMP           { return PREC_BIT_AND; }
+    if kind == TOK_LSHIFT        { return PREC_SHIFT; }
+    if kind == TOK_RSHIFT        { return PREC_SHIFT; }
+    if kind == TOK_PLUS          { return PREC_TERM; }
+    if kind == TOK_MINUS         { return PREC_TERM; }
+    if kind == TOK_STAR          { return PREC_FACTOR; }
+    if kind == TOK_SLASH         { return PREC_FACTOR; }
+    if kind == TOK_PERCENT       { return PREC_FACTOR; }
+    if kind == TOK_PLUS_PLUS     { return PREC_POSTFIX; }
+    if kind == TOK_MINUS_MINUS   { return PREC_POSTFIX; }
+    if kind == TOK_DOT           { return PREC_POSTFIX; }
+    if kind == TOK_LBRACKET      { return PREC_POSTFIX; }
+    if kind == TOK_LPAREN        { return PREC_POSTFIX; }
+    if kind == TOK_AS            { return PREC_POSTFIX; }
+    if kind == TOK_QUESTION      { return PREC_POSTFIX; }
+    return PREC_NONE;
+}
+
+private *AstNode parse_primary(p: *Parser) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let k:    int = (*p).current.kind;
+
+    if k == TOK_INT_LIT {
+        let n: *AstNode = node_alloc((*p).arena, NK_INT_LIT, line, col);
+        (*n).payload.int_lit.value = (*p).current.int_val;
+        p_advance(p);
+        return n;
+    }
+    if k == TOK_FLOAT_LIT {
+        let n: *AstNode = node_alloc((*p).arena, NK_FLOAT_LIT, line, col);
+        (*n).payload.float_lit.value = (*p).current.float_val;
+        p_advance(p);
+        return n;
+    }
+    if k == TOK_STRING_LIT {
+        let n: *AstNode = node_alloc((*p).arena, NK_STRING_LIT, line, col);
+        (*n).payload.str_lit.value = tok_dup(p, (*p).current);
+        p_advance(p);
+        return n;
+    }
+    if k == TOK_CSTRING_LIT {
+        let n: *AstNode = node_alloc((*p).arena, NK_CSTRING_LIT, line, col);
+        (*n).payload.str_lit.value = tok_dup(p, (*p).current);
+        p_advance(p);
+        return n;
+    }
+    if k == TOK_CHAR_LIT {
+        let n: *AstNode = node_alloc((*p).arena, NK_CHAR_LIT, line, col);
+        (*n).payload.bool_lit.value = (*p).current.int_val as int;
+        p_advance(p);
+        return n;
+    }
+    if k == TOK_BOOL_LIT {
+        let n: *AstNode = node_alloc((*p).arena, NK_BOOL_LIT, line, col);
+        (*n).payload.bool_lit.value = (*p).current.int_val as int;
+        p_advance(p);
+        return n;
+    }
+    if k == TOK_NULL {
+        let n: *AstNode = node_alloc((*p).arena, NK_NULL_LIT, line, col);
+        p_advance(p);
+        return n;
+    }
+
+    // Grouped: (expr)
+    if k == TOK_LPAREN {
+        p_advance(p);
+        let e: *AstNode = parse_expr(p);
+        p_expect(p, TOK_RPAREN, c"expected ')'");
+        return e;
+    }
+
+    // sizeof(T) / alignof(T)
+    if k == TOK_SIZEOF {
+        let n: *AstNode = node_alloc((*p).arena, NK_SIZEOF, line, col);
+        p_advance(p);
+        p_expect(p, TOK_LPAREN, c"expected '(' after sizeof");
+        (*n).payload.sizeof_d.type = parse_type(p);
+        p_expect(p, TOK_RPAREN, c"expected ')'");
+        return n;
+    }
+    if k == TOK_ALIGNOF {
+        let n: *AstNode = node_alloc((*p).arena, NK_ALIGNOF, line, col);
+        p_advance(p);
+        p_expect(p, TOK_LPAREN, c"expected '(' after alignof");
+        (*n).payload.sizeof_d.type = parse_type(p);
+        p_expect(p, TOK_RPAREN, c"expected ')'");
+        return n;
+    }
+
+    // new TypeName { field: val }
+    if k == TOK_NEW {
+        let n: *AstNode = node_alloc((*p).arena, NK_NEW, line, col);
+        p_advance(p);
+        let tname: Token = p_expect(p, TOK_IDENT, c"expected type name after 'new'");
+        (*n).payload.new_d.type_name = tok_dup(p, tname);
+        if p_match(p, TOK_LBRACE) == 1 {
+            let cap: int = 8; let count: int = 0;
+            let fnames: *int = arena_alloc((*p).arena, cap * 8) as *int;
+            let fvals:  *int = arena_alloc((*p).arena, cap * 8) as *int;
+            while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+                let fn2: Token = p_expect(p, TOK_IDENT, c"expected field name");
+                p_expect(p, TOK_COLON, c"expected ':' after field name");
+                let fni: *AstNode = node_alloc((*p).arena, NK_IDENT, line, col);
+                (*fni).payload.ident.name = tok_dup(p, fn2);
+                *(fnames + count) = fni as int;
+                *(fvals  + count) = parse_expr(p) as int;
+                count = count + 1;
+                p_match(p, TOK_COMMA);
+            }
+            p_expect(p, TOK_RBRACE, c"expected '}' after new initializer");
+            (*n).payload.new_d.field_names  = fnames;
+            (*n).payload.new_d.field_values = fvals;
+            (*n).payload.new_d.field_count  = count;
+        }
+        return n;
+    }
+
+    // .{ x: val }  inferred struct literal
+    if k == TOK_DOT {
+        p_advance(p);
+        if p_match(p, TOK_LBRACE) == 1 {
+            let n: *AstNode = node_alloc((*p).arena, NK_STRUCT_LIT, line, col);
+            (*n).payload.struct_lit.type_name = null;
+            let cap: int = 8; let count: int = 0;
+            let fnames: *int = arena_alloc((*p).arena, cap * 8) as *int;
+            let fvals:  *int = arena_alloc((*p).arena, cap * 8) as *int;
+            while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+                let fn2: Token = p_expect(p, TOK_IDENT, c"expected field name");
+                p_expect(p, TOK_COLON, c"expected ':' in struct literal");
+                let fni: *AstNode = node_alloc((*p).arena, NK_IDENT, line, col);
+                (*fni).payload.ident.name = tok_dup(p, fn2);
+                *(fnames + count) = fni as int;
+                *(fvals  + count) = parse_expr(p) as int;
+                count = count + 1;
+                p_match(p, TOK_COMMA);
+            }
+            p_expect(p, TOK_RBRACE, c"expected '}'");
+            (*n).payload.struct_lit.field_names  = fnames;
+            (*n).payload.struct_lit.field_values = fvals;
+            (*n).payload.struct_lit.field_count  = count;
+            return n;
+        }
+        p_error(p, c"expected '{' after '.' for inferred struct literal");
+    }
+
+    // [1, 2, 3]  array literal
+    if k == TOK_LBRACKET {
+        let n: *AstNode = node_alloc((*p).arena, NK_ARRAY_LIT, line, col);
+        p_advance(p);
+        let cap: int = 16; let count: int = 0;
+        let elems: *int = arena_alloc((*p).arena, cap * 8) as *int;
+        if p_check(p, TOK_RBRACKET) == 0 {
+            let running: int = 1;
+            while running == 1 {
+                *(elems + count) = parse_expr(p) as int;
+                count = count + 1;
+                if p_match(p, TOK_COMMA) == 0 { running = 0; }
+                if p_check(p, TOK_RBRACKET) == 1 { running = 0; }
+            }
+        }
+        p_expect(p, TOK_RBRACKET, c"expected ']'");
+        (*n).payload.array_lit.elems = elems;
+        (*n).payload.array_lit.count = count;
+        return n;
+    }
+
+    // if expr { } else { }  (expression form)
+    if k == TOK_IF {
+        let n: *AstNode = node_alloc((*p).arena, NK_IF_EXPR, line, col);
+        p_advance(p);
+        (*n).payload.if_d.condition  = parse_expr(p);
+        (*n).payload.if_d.then_block = parse_block(p);
+        if p_match(p, TOK_ELSE) == 1 { (*n).payload.if_d.else_block = parse_block(p); }
+        return n;
+    }
+
+    // Identifier: ident, Enum::Variant, StructLit{ }
+    if k == TOK_IDENT {
+        let name_tok: Token = (*p).current;
+        p_advance(p);
+        let name_buf: *int = tok_dup(p, name_tok);
+
+        // Enum literal: Shape::Circle(5.0)
+        if p_check(p, TOK_COLONCOLON) == 1 {
+            p_advance(p);
+            let vtok: Token = p_expect(p, TOK_IDENT, c"expected variant name after '::'");
+            let n: *AstNode = node_alloc((*p).arena, NK_ENUM_LITERAL, line, col);
+            (*n).payload.enum_lit.enum_name = name_buf;
+            (*n).payload.enum_lit.variant   = tok_dup(p, vtok);
+            (*n).payload.enum_lit.args      = null;
+            (*n).payload.enum_lit.arg_count = 0;
+            if p_match(p, TOK_LPAREN) == 1 {
+                let cap: int = 8; let count: int = 0;
+                let args: *int = arena_alloc((*p).arena, cap * 8) as *int;
+                let running: int = 1;
+                while p_check(p, TOK_RPAREN) == 0 && p_check(p, TOK_EOF) == 0 && running == 1 {
+                    *(args + count) = parse_expr(p) as int;
+                    count = count + 1;
+                    if p_match(p, TOK_COMMA) == 0 { running = 0; }
+                    if p_check(p, TOK_RPAREN) == 1 { running = 0; }
+                }
+                p_expect(p, TOK_RPAREN, c"expected ')' after variant args");
+                (*n).payload.enum_lit.args      = args;
+                (*n).payload.enum_lit.arg_count = count;
+            }
+            return n;
+        }
+
+        // Named struct literal: Vec2 { x: 1.0, y: 2.0 }
+        if p_check(p, TOK_LBRACE) == 1 && (*p).no_struct_lit == 0 {
+            p_advance(p);
+            let n: *AstNode = node_alloc((*p).arena, NK_STRUCT_LIT, line, col);
+            (*n).payload.struct_lit.type_name = name_buf;
+            let cap: int = 8; let count: int = 0;
+            let fnames: *int = arena_alloc((*p).arena, cap * 8) as *int;
+            let fvals:  *int = arena_alloc((*p).arena, cap * 8) as *int;
+            while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+                let fn2: Token = p_expect(p, TOK_IDENT, c"expected field name");
+                p_expect(p, TOK_COLON, c"expected ':' in struct literal");
+                let fni: *AstNode = node_alloc((*p).arena, NK_IDENT, line, col);
+                (*fni).payload.ident.name = tok_dup(p, fn2);
+                *(fnames + count) = fni as int;
+                *(fvals  + count) = parse_expr(p) as int;
+                count = count + 1;
+                p_match(p, TOK_COMMA);
+            }
+            p_expect(p, TOK_RBRACE, c"expected '}'");
+            (*n).payload.struct_lit.field_names  = fnames;
+            (*n).payload.struct_lit.field_values = fvals;
+            (*n).payload.struct_lit.field_count  = count;
+            return n;
+        }
+
+        // Plain identifier
+        let n: *AstNode = node_alloc((*p).arena, NK_IDENT, line, col);
+        (*n).payload.ident.name = name_buf;
+        return n;
+    }
+
+    p_error(p, c"expected expression");
+    p_advance(p);
+    return node_alloc((*p).arena, NK_INT_LIT, line, col);
+}
+
+private *AstNode parse_expr_prec(p: *Parser, min_prec: int) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let cur:  int = (*p).current.kind;
+    let left: *AstNode = null;
+
+    // Prefix unary
+    if cur == TOK_MINUS || cur == TOK_BANG || cur == TOK_TILDE {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_UNARY, line, col);
+        (*n).payload.unary.op = cur; (*n).payload.unary.postfix = 0;
+        (*n).payload.unary.operand = parse_expr_prec(p, PREC_UNARY);
+        left = n;
+    } else {
+        if cur == TOK_STAR {
+            p_advance(p);
+            let n: *AstNode = node_alloc((*p).arena, NK_DEREF, line, col);
+            (*n).payload.unary.op = cur;
+            (*n).payload.unary.operand = parse_expr_prec(p, PREC_UNARY);
+            left = n;
+        } else {
+            if cur == TOK_AMP {
+                p_advance(p);
+                let n: *AstNode = node_alloc((*p).arena, NK_ADDRESS_OF, line, col);
+                (*n).payload.unary.op = cur;
+                (*n).payload.unary.operand = parse_expr_prec(p, PREC_UNARY);
+                left = n;
+            } else {
+                if cur == TOK_PLUS_PLUS || cur == TOK_MINUS_MINUS {
+                    p_advance(p);
+                    let n: *AstNode = node_alloc((*p).arena, NK_UNARY, line, col);
+                    (*n).payload.unary.op = cur; (*n).payload.unary.postfix = 0;
+                    (*n).payload.unary.operand = parse_expr_prec(p, PREC_UNARY);
+                    left = n;
+                } else {
+                    left = parse_primary(p);
+                }
+            }
+        }
+    }
+
+    // Infix / postfix loop
+    let running: int = 1;
+    while running == 1 {
+        let prec: int = token_prec((*p).current.kind);
+        if prec <= min_prec { running = 0; }
+        if running == 1 {
+            let op:      int = (*p).current.kind;
+            let op_line: int = (*p).current.line;
+            let op_col:  int = (*p).current.col;
+            p_advance(p);
+
+            if op == TOK_PLUS_PLUS || op == TOK_MINUS_MINUS {
+                let n: *AstNode = node_alloc((*p).arena, NK_UNARY, op_line, op_col);
+                (*n).payload.unary.op = op; (*n).payload.unary.postfix = 1;
+                (*n).payload.unary.operand = left;
+                left = n;
+            } else {
+                if op == TOK_DOT {
+                    let fname: Token = p_expect(p, TOK_IDENT, c"expected field name after '.'");
+                    let n: *AstNode = node_alloc((*p).arena, NK_FIELD, op_line, op_col);
+                    (*n).payload.field.target = left;
+                    (*n).payload.field.field  = tok_dup(p, fname);
+                    left = n;
+                } else {
+                    if op == TOK_LBRACKET {
+                        let idx: *AstNode = parse_expr(p);
+                        if p_check(p, TOK_DOTDOT) == 1 || p_check(p, TOK_DOTDOT_EQ) == 1 {
+                            let inclusive: int = p_check(p, TOK_DOTDOT_EQ);
+                            p_advance(p);
+                            let n: *AstNode = node_alloc((*p).arena, NK_SLICE_EXPR, op_line, op_col);
+                            (*n).payload.slice_e.target    = left;
+                            (*n).payload.slice_e.from      = idx;
+                            (*n).payload.slice_e.inclusive = inclusive;
+                            if p_check(p, TOK_RBRACKET) == 0 { (*n).payload.slice_e.to = parse_expr(p); }
+                            p_expect(p, TOK_RBRACKET, c"expected ']'");
+                            left = n;
+                        } else {
+                            let n: *AstNode = node_alloc((*p).arena, NK_INDEX, op_line, op_col);
+                            (*n).payload.index.target = left;
+                            (*n).payload.index.index  = idx;
+                            p_expect(p, TOK_RBRACKET, c"expected ']'");
+                            left = n;
+                        }
+                    } else {
+                        if op == TOK_LPAREN {
+                            let n: *AstNode = node_alloc((*p).arena, NK_CALL, op_line, op_col);
+                            (*n).payload.call.callee = left;
+                            let cap: int = 8; let count: int = 0;
+                            let args: *int = arena_alloc((*p).arena, cap * 8) as *int;
+                            if p_check(p, TOK_RPAREN) == 0 {
+                                let inner: int = 1;
+                                while inner == 1 {
+                                    *(args + count) = parse_expr(p) as int;
+                                    count = count + 1;
+                                    if p_match(p, TOK_COMMA) == 0 { inner = 0; }
+                                    if p_check(p, TOK_RPAREN) == 1 { inner = 0; }
+                                }
+                            }
+                            p_expect(p, TOK_RPAREN, c"expected ')'");
+                            (*n).payload.call.args      = args;
+                            (*n).payload.call.arg_count = count;
+                            left = n;
+                        } else {
+                            if op == TOK_AS {
+                                let n: *AstNode = node_alloc((*p).arena, NK_CAST, op_line, op_col);
+                                (*n).payload.cast_d.expr = left;
+                                (*n).payload.cast_d.type = parse_type(p);
+                                left = n;
+                            } else {
+                                if op == TOK_QUESTION {
+                                    let n: *AstNode = node_alloc((*p).arena, NK_PROPAGATE, op_line, op_col);
+                                    (*n).payload.propagate.expr = left;
+                                    left = n;
+                                } else {
+                                    if op == TOK_DOTDOT || op == TOK_DOTDOT_EQ {
+                                        let n: *AstNode = node_alloc((*p).arena, NK_RANGE, op_line, op_col);
+                                        (*n).payload.range.from      = left;
+                                        (*n).payload.range.to        = parse_expr_prec(p, PREC_RANGE);
+                                        (*n).payload.range.inclusive = op == TOK_DOTDOT_EQ;
+                                        left = n;
+                                    } else {
+                                        if op == TOK_ASSIGN     || op == TOK_PLUS_ASSIGN  ||
+                                           op == TOK_MINUS_ASSIGN || op == TOK_STAR_ASSIGN ||
+                                           op == TOK_SLASH_ASSIGN {
+                                            let n: *AstNode = node_alloc((*p).arena, NK_ASSIGN, op_line, op_col);
+                                            (*n).payload.assign.op     = op;
+                                            (*n).payload.assign.target = left;
+                                            (*n).payload.assign.value  = parse_expr_prec(p, PREC_ASSIGN - 1);
+                                            left = n;
+                                        } else {
+                                            let n: *AstNode = node_alloc((*p).arena, NK_BINARY, op_line, op_col);
+                                            (*n).payload.binary.op    = op;
+                                            (*n).payload.binary.left  = left;
+                                            (*n).payload.binary.right = parse_expr_prec(p, prec);
+                                            left = n;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return left;
+}
+
+private *AstNode parse_expr(p: *Parser) {
+    return parse_expr_prec(p, PREC_NONE);
+}
+
+// ─── BLOCK PARSER ─────────────────────────────────────────────────────────────
+
+private *AstNode parse_block(p: *Parser) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    p_expect(p, TOK_LBRACE, c"expected '{'");
+    let n: *AstNode = node_alloc((*p).arena, NK_BLOCK, line, col);
+    let cap:   int = 32;
+    let count: int = 0;
+    let stmts: *int = arena_alloc((*p).arena, cap * 8) as *int;
+    while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+        if count >= cap {
+            let nc: int = cap * 2;
+            let ns: *int = arena_alloc((*p).arena, nc * 8) as *int;
+            let ci: int = 0;
+            while ci < count { *(ns + ci) = *(stmts + ci); ci = ci + 1; }
+            stmts = ns; cap = nc;
+        }
+        let s: *AstNode = parse_stmt(p);
+        if s != null { *(stmts + count) = s as int; count = count + 1; }
+        if (*p).panic_mode == 1 { p_sync(p); }
+    }
+    p_expect(p, TOK_RBRACE, c"expected '}'");
+    (*n).payload.block.stmts = stmts;
+    (*n).payload.block.count = count;
+    return n;
+}
+
+// ─── MATCH PARSER ─────────────────────────────────────────────────────────────
+
+private *AstNode parse_match(p: *Parser, line: int, col: int) {
+    let n: *AstNode = node_alloc((*p).arena, NK_MATCH, line, col);
+    (*p).no_struct_lit = 1;
+    (*n).payload.match_d.subject = parse_expr(p);
+    (*p).no_struct_lit = 0;
+    p_expect(p, TOK_LBRACE, c"expected '{' after match subject");
+    let cap:   int = 16;
+    let count: int = 0;
+    // Arms stored flat: 4 ints each: pattern*, guard*, body*, 0
+    let arms: *int = arena_alloc((*p).arena, cap * 32) as *int;
+    while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+        let aline: int = (*p).current.line;
+        let acol:  int = (*p).current.col;
+        let pattern: *AstNode = null;
+        let guard:   *AstNode = null;
+        if p_check(p, TOK_IDENT) == 1 {
+            let first: Token = (*p).current;
+            let fname: *int  = tok_dup(p, first);
+            p_advance(p);
+            if intstr_eq(fname, first.len, c"_") == 1 {
+                let pat: *AstNode = node_alloc((*p).arena, NK_IDENT, aline, acol);
+                (*pat).payload.ident.name = fname;
+                pattern = pat;
+            } else {
+                if p_check(p, TOK_LPAREN) == 1 {
+                    let pat: *AstNode = node_alloc((*p).arena, NK_ENUM_PATTERN, aline, acol);
+                    (*pat).payload.enum_pattern.enum_name = fname;
+                    (*pat).payload.enum_pattern.variant   = fname;
+                    p_advance(p);
+                    let bcap: int = 8; let bcount: int = 0;
+                    let binds: *int = arena_alloc((*p).arena, bcap * 8) as *int;
+                    let running: int = 1;
+                    while p_check(p, TOK_RPAREN) == 0 && p_check(p, TOK_EOF) == 0 && running == 1 {
+                        let b: Token = p_expect(p, TOK_IDENT, c"expected binding name");
+                        *(binds + bcount) = tok_dup(p, b) as int;
+                        bcount = bcount + 1;
+                        if p_match(p, TOK_COMMA) == 0 { running = 0; }
+                    }
+                    p_expect(p, TOK_RPAREN, c"expected ')'");
+                    (*pat).payload.enum_pattern.bindings      = binds;
+                    (*pat).payload.enum_pattern.binding_count = bcount;
+                    pattern = pat;
+                } else {
+                    if p_check(p, TOK_COLONCOLON) == 1 {
+                        p_advance(p);
+                        let vtok: Token = p_expect(p, TOK_IDENT, c"expected variant name");
+                        let pat: *AstNode = node_alloc((*p).arena, NK_ENUM_PATTERN, aline, acol);
+                        (*pat).payload.enum_pattern.enum_name = fname;
+                        (*pat).payload.enum_pattern.variant   = tok_dup(p, vtok);
+                        let bcap: int = 8; let bcount: int = 0;
+                        let binds: *int = arena_alloc((*p).arena, bcap * 8) as *int;
+                        if p_match(p, TOK_LPAREN) == 1 {
+                            let running: int = 1;
+                            while p_check(p, TOK_RPAREN) == 0 && p_check(p, TOK_EOF) == 0 && running == 1 {
+                                let b: Token = p_expect(p, TOK_IDENT, c"expected binding name");
+                                *(binds + bcount) = tok_dup(p, b) as int;
+                                bcount = bcount + 1;
+                                if p_match(p, TOK_COMMA) == 0 { running = 0; }
+                            }
+                            p_expect(p, TOK_RPAREN, c"expected ')'");
+                        }
+                        (*pat).payload.enum_pattern.bindings      = binds;
+                        (*pat).payload.enum_pattern.binding_count = bcount;
+                        pattern = pat;
+                    } else {
+                        let pat: *AstNode = node_alloc((*p).arena, NK_IDENT, aline, acol);
+                        (*pat).payload.ident.name = fname;
+                        pattern = pat;
+                    }
+                }
+            }
+        } else {
+            pattern = parse_expr(p);
+        }
+        if p_match(p, TOK_IF) == 1 { guard = parse_expr(p); }
+        p_expect(p, TOK_FAT_ARROW, c"expected '=>' in match arm");
+        let body: *AstNode = null;
+        if p_check(p, TOK_LBRACE) == 1 { body = parse_block(p); }
+        else { body = parse_expr(p); }
+        p_match(p, TOK_COMMA);
+        let arm_base: *int = arms + count * 4;
+        *(arm_base + 0) = pattern as int;
+        *(arm_base + 1) = guard as int;
+        *(arm_base + 2) = body as int;
+        *(arm_base + 3) = 0;
+        count = count + 1;
+    }
+    p_expect(p, TOK_RBRACE, c"expected '}'");
+    (*n).payload.match_d.arms      = arms;
+    (*n).payload.match_d.arm_count = count;
+    return n;
+}
+
+// ─── STATEMENT PARSER ─────────────────────────────────────────────────────────
+
+private *AstNode parse_stmt(p: *Parser) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let k:    int = (*p).current.kind;
+
+    if k == TOK_LET {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_VAR_DECL, line, col);
+        (*n).payload.var_d.is_const = 0;
+        let nt: Token = p_expect(p, TOK_IDENT, c"expected variable name");
+        (*n).payload.var_d.name = tok_dup(p, nt);
+        if p_match(p, TOK_COLON) == 1  { (*n).payload.var_d.type  = parse_type(p); }
+        if p_match(p, TOK_ASSIGN) == 1 { (*n).payload.var_d.value = parse_expr(p); }
+        p_expect(p, TOK_SEMICOLON, c"expected ';' after variable declaration");
+        return n;
+    }
+    if k == TOK_CONST {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_VAR_DECL, line, col);
+        (*n).payload.var_d.is_const = 1;
+        let nt: Token = p_expect(p, TOK_IDENT, c"expected constant name");
+        (*n).payload.var_d.name = tok_dup(p, nt);
+        if p_match(p, TOK_COLON) == 1 { (*n).payload.var_d.type = parse_type(p); }
+        p_expect(p, TOK_ASSIGN, c"expected '='");
+        (*n).payload.var_d.value = parse_expr(p);
+        p_expect(p, TOK_SEMICOLON, c"expected ';'");
+        return n;
+    }
+    if k == TOK_RETURN {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_RETURN, line, col);
+        if p_check(p, TOK_SEMICOLON) == 0 { (*n).payload.ret.value = parse_expr(p); }
+        p_expect(p, TOK_SEMICOLON, c"expected ';' after return");
+        return n;
+    }
+    if k == TOK_IF {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_IF, line, col);
+        (*p).no_struct_lit = 1;
+        (*n).payload.if_d.condition = parse_expr(p);
+        (*p).no_struct_lit = 0;
+        (*n).payload.if_d.then_block = parse_block(p);
+        let ei_cap: int = 4; let ei_count: int = 0;
+        let ei_conds:  *int = arena_alloc((*p).arena, ei_cap * 8) as *int;
+        let ei_blocks: *int = arena_alloc((*p).arena, ei_cap * 8) as *int;
+        let running: int = 1;
+        while p_match(p, TOK_ELSE) == 1 && running == 1 {
+            if p_match(p, TOK_IF) == 1 {
+                *(ei_conds  + ei_count) = parse_expr(p) as int;
+                *(ei_blocks + ei_count) = parse_block(p) as int;
+                ei_count = ei_count + 1;
+            } else {
+                (*n).payload.if_d.else_block = parse_block(p);
+                running = 0;
+            }
+        }
+        (*n).payload.if_d.else_if_conds  = ei_conds;
+        (*n).payload.if_d.else_if_blocks = ei_blocks;
+        (*n).payload.if_d.else_if_count  = ei_count;
+        return n;
+    }
+    if k == TOK_WHILE {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_WHILE, line, col);
+        (*p).no_struct_lit = 1;
+        (*n).payload.while_d.condition = parse_expr(p);
+        (*p).no_struct_lit = 0;
+        (*n).payload.while_d.body = parse_block(p);
+        return n;
+    }
+    if k == TOK_LOOP {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_LOOP, line, col);
+        (*n).payload.loop_d.body = parse_block(p);
+        return n;
+    }
+    if k == TOK_FOR {
+        p_advance(p);
+        if p_match(p, TOK_LPAREN) == 1 {
+            let n: *AstNode = node_alloc((*p).arena, NK_FOR_C, line, col);
+            (*n).payload.for_c.init      = parse_stmt(p);
+            (*n).payload.for_c.condition = parse_expr(p);
+            p_expect(p, TOK_SEMICOLON, c"expected ';' in for loop");
+            (*n).payload.for_c.post = parse_expr(p);
+            p_expect(p, TOK_RPAREN, c"expected ')' after for clauses");
+            (*n).payload.for_c.body = parse_block(p);
+            return n;
+        }
+        let first_tok:  Token = p_expect(p, TOK_IDENT, c"expected variable in for");
+        let first_name: *int  = tok_dup(p, first_tok);
+        if p_match(p, TOK_COMMA) == 1 {
+            let n: *AstNode = node_alloc((*p).arena, NK_FOR_INDEX, line, col);
+            let vtok: Token = p_expect(p, TOK_IDENT, c"expected value variable after ','");
+            p_expect(p, TOK_IN, c"expected 'in' after for variables");
+            (*n).payload.for_index.index_var = first_name;
+            (*n).payload.for_index.value_var = tok_dup(p, vtok);
+            (*n).payload.for_index.iterable  = parse_expr(p);
+            (*n).payload.for_index.body      = parse_block(p);
+            return n;
+        }
+        p_expect(p, TOK_IN, c"expected 'in' after for variable");
+        (*p).no_struct_lit = 1;
+        let from: *AstNode = parse_expr(p);
+        (*p).no_struct_lit = 0;
+        if (*from).kind == NK_RANGE {
+            let n: *AstNode = node_alloc((*p).arena, NK_FOR_RANGE, line, col);
+            (*n).payload.for_range.var       = first_name;
+            (*n).payload.for_range.from      = (*from).payload.range.from;
+            (*n).payload.for_range.to        = (*from).payload.range.to;
+            (*n).payload.for_range.inclusive = (*from).payload.range.inclusive;
+            (*n).payload.for_range.body      = parse_block(p);
+            return n;
+        }
+        let n: *AstNode = node_alloc((*p).arena, NK_FOR_IN, line, col);
+        (*n).payload.for_in.var      = first_name;
+        (*n).payload.for_in.iterable = from;
+        (*n).payload.for_in.body     = parse_block(p);
+        return n;
+    }
+    if k == TOK_MATCH {
+        p_advance(p);
+        return parse_match(p, line, col);
+    }
+    if k == TOK_BREAK {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_BREAK, line, col);
+        if p_check(p, TOK_IDENT) == 1 { (*n).payload.jump.label = tok_dup(p, (*p).current); p_advance(p); }
+        p_expect(p, TOK_SEMICOLON, c"expected ';' after break");
+        return n;
+    }
+    if k == TOK_CONTINUE {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_CONTINUE, line, col);
+        if p_check(p, TOK_IDENT) == 1 { (*n).payload.jump.label = tok_dup(p, (*p).current); p_advance(p); }
+        p_expect(p, TOK_SEMICOLON, c"expected ';' after continue");
+        return n;
+    }
+    if k == TOK_DEFER {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_DEFER, line, col);
+        (*n).payload.defer_d.stmt = parse_stmt(p);
+        return n;
+    }
+    if k == TOK_PANIC {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_PANIC, line, col);
+        p_expect(p, TOK_LPAREN, c"expected '(' after panic");
+        (*n).payload.panic_d.msg = parse_expr(p);
+        p_expect(p, TOK_RPAREN, c"expected ')'");
+        p_expect(p, TOK_SEMICOLON, c"expected ';'");
+        return n;
+    }
+    if k == TOK_DELETE {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_DELETE, line, col);
+        (*n).payload.delete_d.ptr = parse_expr(p);
+        p_expect(p, TOK_SEMICOLON, c"expected ';' after delete");
+        return n;
+    }
+    if k == TOK_ASM {
+        p_advance(p);
+        let n: *AstNode = node_alloc((*p).arena, NK_ASM_BLOCK, line, col);
+        p_expect(p, TOK_LBRACE, c"expected '{' after asm");
+        let depth: int = 1;
+        while depth > 0 && p_check(p, TOK_EOF) == 0 {
+            if p_check(p, TOK_LBRACE) == 1 { depth = depth + 1; }
+            if p_check(p, TOK_RBRACE) == 1 { depth = depth - 1; }
+            p_advance(p);
+        }
+        return n;
+    }
+    // Expression statement
+    let expr: *AstNode = parse_expr(p);
+    let n: *AstNode = node_alloc((*p).arena, NK_EXPR_STMT, line, col);
+    (*n).payload.expr_stmt.expr = expr;
+    p_expect(p, TOK_SEMICOLON, c"expected ';' after expression");
+    return n;
+}
+
+// ─── FUNCTION DECLARATION ────────────────────────────────────────────────────
+
+private *AstNode parse_func_decl(p: *Parser, access: int, ret: *AstType, name: *int) {
+    let line: int = (*p).previous.line;
+    let col:  int = (*p).previous.col;
+    let n: *AstNode = node_alloc((*p).arena, NK_FUNC_DECL, line, col);
+    (*n).payload.func.access      = access;
+    (*n).payload.func.name        = name;
+    (*n).payload.func.return_type = ret;
+    (*n).payload.func.is_method   = 0;
+
+    // Generic params: name<T, U>(
+    if p_match(p, TOK_LT) == 1 {
+        let cap: int = 4; let count: int = 0;
+        let gp: *int = arena_alloc((*p).arena, cap * 8) as *int;
+        let running: int = 1;
+        while running == 1 {
+            let tp: Token = p_expect(p, TOK_IDENT, c"expected generic type param");
+            *(gp + count) = tok_dup(p, tp) as int;
+            count = count + 1;
+            if p_match(p, TOK_COLON) == 1 { parse_type(p); }
+            if p_match(p, TOK_COMMA) == 0 { running = 0; }
+        }
+        p_expect(p, TOK_GT, c"expected '>' after generic params");
+        (*n).payload.func.generic_params = gp;
+        (*n).payload.func.generic_count  = count;
+    }
+
+    p_expect(p, TOK_LPAREN, c"expected '(' after function name");
+    let cap: int = 8; let count: int = 0;
+    let params: *AstParam = arena_alloc((*p).arena, cap * 32) as *AstParam;
+
+    if p_check(p, TOK_RPAREN) == 0 {
+        let running: int = 1;
+        while running == 1 {
+            // self parameter
+            if p_check(p, TOK_IDENT) == 1 && (*p).current.len == 4 &&
+               intstr_eq((*p).current.start, 4, c"self") == 1 {
+                p_advance(p);
+                (*n).payload.func.is_method = 1;
+                let sp: *AstParam = (params as *int + count * 4) as *AstParam;
+                let sname: *int = arena_alloc((*p).arena, 40) as *int;
+                *(sname + 0) = 115; *(sname + 1) = 101;
+                *(sname + 2) = 108; *(sname + 3) = 102; *(sname + 4) = 0;
+                (*sp).name = sname;
+                (*sp).is_variadic = 0;
+                if p_match(p, TOK_COLON) == 1 { (*sp).type = parse_type(p); }
+            } else {
+                // Variadic: ...name: type
+                let is_var: int = 0;
+                if p_match(p, TOK_DOTDOT) == 1 {
+                    if p_match(p, TOK_DOT) == 1 { is_var = 1; }
+                }
+                let pname_tok: Token = p_expect(p, TOK_IDENT, c"expected parameter name");
+                p_expect(p, TOK_COLON, c"expected ':' after parameter name");
+                let pt: *AstType = parse_type(p);
+                let sp: *AstParam = (params as *int + count * 4) as *AstParam;
+                (*sp).name        = tok_dup(p, pname_tok);
+                (*sp).type        = pt;
+                (*sp).is_variadic = is_var;
+                (*sp).default_value = null;
+                if p_match(p, TOK_ASSIGN) == 1 { (*sp).default_value = parse_expr(p); }
+            }
+            count = count + 1;
+            if p_match(p, TOK_COMMA) == 0 { running = 0; }
+            if p_check(p, TOK_RPAREN) == 1 { running = 0; }
+        }
+    }
+    p_expect(p, TOK_RPAREN, c"expected ')' after parameters");
+    (*n).payload.func.params      = params;
+    (*n).payload.func.param_count = count;
+
+    // -> return type when not provided by caller
+    if ret == null && p_match(p, TOK_ARROW) == 1 {
+        (*n).payload.func.return_type = parse_type(p);
+    }
+
+    // Signature-only (interface method) or full body
+    if p_check(p, TOK_SEMICOLON) == 1 {
+        p_match(p, TOK_SEMICOLON);
+        (*n).payload.func.body = null;
+    } else {
+        (*n).payload.func.body = parse_block(p);
+    }
+    return n;
+}
+
+// ─── STRUCT DECLARATION ───────────────────────────────────────────────────────
+
+private *AstNode parse_struct_decl(p: *Parser, access: int) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let name: Token = p_expect(p, TOK_IDENT, c"expected struct name");
+    let n: *AstNode = node_alloc((*p).arena, NK_STRUCT_DECL, line, col);
+    (*n).payload.struct_d.access = access;
+    (*n).payload.struct_d.name   = tok_dup(p, name);
+    if p_match(p, TOK_LT) == 1 {
+        let cap: int = 4; let count: int = 0;
+        let gp: *int = arena_alloc((*p).arena, cap * 8) as *int;
+        let running: int = 1;
+        while running == 1 {
+            let tp: Token = p_expect(p, TOK_IDENT, c"expected type param");
+            *(gp + count) = tok_dup(p, tp) as int;
+            count = count + 1;
+            if p_match(p, TOK_COMMA) == 0 { running = 0; }
+        }
+        p_expect(p, TOK_GT, c"expected '>'");
+        (*n).payload.struct_d.generic_params = gp;
+        (*n).payload.struct_d.generic_count  = count;
+    }
+    p_expect(p, TOK_LBRACE, c"expected '{' after struct name");
+    let field_cap: int = 16; let field_count: int = 0;
+    let method_cap: int = 16; let method_count: int = 0;
+    let fields:  *AstField = arena_alloc((*p).arena, field_cap  * 24) as *AstField;
+    let methods: *int      = arena_alloc((*p).arena, method_cap * 8)  as *int;
+    while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+        let ck: int = (*p).current.kind;
+        if ck == TOK_PUBLIC || ck == TOK_PRIVATE || ck == TOK_INTERNAL {
+            *(methods + method_count) = parse_decl(p) as int;
+            method_count = method_count + 1;
+        } else {
+            let fname: Token = p_expect(p, TOK_IDENT, c"expected field name");
+            p_expect(p, TOK_COLON, c"expected ':'");
+            let ftype: *AstType = parse_type(p);
+            let fp: *AstField = (fields as *int + field_count * 3) as *AstField;
+            (*fp).name = tok_dup(p, fname);
+            (*fp).type = ftype;
+            (*fp).default_value = null;
+            if p_match(p, TOK_ASSIGN) == 1 { (*fp).default_value = parse_expr(p); }
+            p_match(p, TOK_COMMA);
+            field_count = field_count + 1;
+        }
+    }
+    p_expect(p, TOK_RBRACE, c"expected '}'");
+    (*n).payload.struct_d.fields        = fields;
+    (*n).payload.struct_d.field_count   = field_count;
+    (*n).payload.struct_d.methods       = methods;
+    (*n).payload.struct_d.method_count  = method_count;
+    return n;
+}
+
+private *AstNode parse_union_decl(p: *Parser, access: int) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let name: Token = p_expect(p, TOK_IDENT, c"expected union name");
+    let n: *AstNode = node_alloc((*p).arena, NK_UNION_DECL, line, col);
+    (*n).payload.struct_d.access = access;
+    (*n).payload.struct_d.name   = tok_dup(p, name);
+    p_expect(p, TOK_LBRACE, c"expected '{'");
+    let field_cap: int = 16; let field_count: int = 0;
+    let fields: *AstField = arena_alloc((*p).arena, field_cap * 24) as *AstField;
+    while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+        let fname: Token = p_expect(p, TOK_IDENT, c"expected field name");
+        p_expect(p, TOK_COLON, c"expected ':'");
+        let ftype: *AstType = parse_type(p);
+        let fp: *AstField = (fields as *int + field_count * 3) as *AstField;
+        (*fp).name = tok_dup(p, fname);
+        (*fp).type = ftype;
+        (*fp).default_value = null;
+        p_match(p, TOK_COMMA);
+        field_count = field_count + 1;
+    }
+    p_expect(p, TOK_RBRACE, c"expected '}'");
+    (*n).payload.struct_d.fields       = fields;
+    (*n).payload.struct_d.field_count  = field_count;
+    (*n).payload.struct_d.methods      = null;
+    (*n).payload.struct_d.method_count = 0;
+    return n;
+}
+
+// ─── ENUM DECLARATION ────────────────────────────────────────────────────────
+
+private *AstNode parse_enum_decl(p: *Parser, access: int) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let name: Token = p_expect(p, TOK_IDENT, c"expected enum name");
+    let n: *AstNode = node_alloc((*p).arena, NK_ENUM_DECL, line, col);
+    (*n).payload.enum_d.access = access;
+    (*n).payload.enum_d.name   = tok_dup(p, name);
+    p_expect(p, TOK_LBRACE, c"expected '{'");
+    let cap: int = 16; let count: int = 0;
+    let variants: *AstVariant = arena_alloc((*p).arena, cap * 40) as *AstVariant;
+    while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+        let vname: Token = p_expect(p, TOK_IDENT, c"expected variant name");
+        let vp: *AstVariant = (variants as *int + count * 5) as *AstVariant;
+        (*vp).name        = tok_dup(p, vname);
+        (*vp).has_value   = 0;
+        (*vp).fields      = null;
+        (*vp).field_count = 0;
+        if p_match(p, TOK_ASSIGN) == 1 {
+            (*vp).has_value      = 1;
+            (*vp).explicit_value = parse_expr(p);
+        }
+        if p_match(p, TOK_LPAREN) == 1 {
+            let fcap: int = 4; let fcount: int = 0;
+            let fields: *AstParam = arena_alloc((*p).arena, fcap * 32) as *AstParam;
+            let running: int = 1;
+            while p_check(p, TOK_RPAREN) == 0 && p_check(p, TOK_EOF) == 0 && running == 1 {
+                let pname: Token = p_expect(p, TOK_IDENT, c"expected field name");
+                p_expect(p, TOK_COLON, c"expected ':'");
+                let pt: *AstType = parse_type(p);
+                let fptr: *AstParam = (fields as *int + fcount * 4) as *AstParam;
+                (*fptr).name = tok_dup(p, pname);
+                (*fptr).type = pt;
+                fcount = fcount + 1;
+                if p_match(p, TOK_COMMA) == 0 { running = 0; }
+            }
+            p_expect(p, TOK_RPAREN, c"expected ')'");
+            (*vp).fields      = fields;
+            (*vp).field_count = fcount;
+        }
+        p_match(p, TOK_COMMA);
+        count = count + 1;
+    }
+    p_expect(p, TOK_RBRACE, c"expected '}'");
+    (*n).payload.enum_d.variants      = variants;
+    (*n).payload.enum_d.variant_count = count;
+    return n;
+}
+
+// ─── IMPL DECLARATION ────────────────────────────────────────────────────────
+
+private *AstNode parse_impl_decl(p: *Parser) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let iface: Token = p_expect(p, TOK_IDENT, c"expected interface name");
+    p_expect(p, TOK_FOR, c"expected 'for' after interface name");
+    let tname: Token = p_expect(p, TOK_IDENT, c"expected type name");
+    let n: *AstNode = node_alloc((*p).arena, NK_IMPL_DECL, line, col);
+    (*n).payload.impl_d.interface_name = tok_dup(p, iface);
+    (*n).payload.impl_d.type_name      = tok_dup(p, tname);
+    p_expect(p, TOK_LBRACE, c"expected '{'");
+    let cap: int = 16; let count: int = 0;
+    let methods: *int = arena_alloc((*p).arena, cap * 8) as *int;
+    while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+        if p_match(p, TOK_FN) == 1 {
+            let mname: Token = p_expect(p, TOK_IDENT, c"expected method name");
+            if count >= cap {
+                let nc: int = cap * 2;
+                let nm: *int = arena_alloc((*p).arena, nc * 8) as *int;
+                let ci: int = 0;
+                while ci < count { *(nm + ci) = *(methods + ci); ci = ci + 1; }
+                methods = nm; cap = nc;
+            }
+            *(methods + count) = parse_func_decl(p, ACCESS_PRIVATE, null, tok_dup(p, mname)) as int;
+            count = count + 1;
+        } else {
+            p_error(p, c"expected 'fn' in impl block");
+            p_advance(p);
+        }
+    }
+    p_expect(p, TOK_RBRACE, c"expected '}'");
+    (*n).payload.impl_d.methods      = methods;
+    (*n).payload.impl_d.method_count = count;
+    return n;
+}
+
+// ─── INTERFACE DECLARATION ───────────────────────────────────────────────────
+
+private *AstNode parse_interface_decl(p: *Parser, access: int) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+    let name: Token = p_expect(p, TOK_IDENT, c"expected interface name");
+    let n: *AstNode = node_alloc((*p).arena, NK_INTERFACE_DECL, line, col);
+    (*n).payload.interface_d.access = access;
+    (*n).payload.interface_d.name   = tok_dup(p, name);
+    p_expect(p, TOK_LBRACE, c"expected '{'");
+    let cap: int = 16; let count: int = 0;
+    let methods: *int = arena_alloc((*p).arena, cap * 8) as *int;
+    while p_check(p, TOK_RBRACE) == 0 && p_check(p, TOK_EOF) == 0 {
+        let ck: int = (*p).current.kind;
+        if p_match(p, TOK_FN) == 1 {
+            let mname: Token = p_expect(p, TOK_IDENT, c"expected method name");
+            *(methods + count) = parse_func_decl(p, ACCESS_PUBLIC, null, tok_dup(p, mname)) as int;
+            count = count + 1;
+        } else {
+            if ck == TOK_PUBLIC || ck == TOK_PRIVATE || ck == TOK_INTERNAL {
+                *(methods + count) = parse_decl(p) as int;
+                count = count + 1;
+            } else {
+                p_error(p, c"expected method signature in interface");
+                p_advance(p);
+            }
+        }
+    }
+    p_expect(p, TOK_RBRACE, c"expected '}'");
+    (*n).payload.interface_d.methods      = methods;
+    (*n).payload.interface_d.method_count = count;
+    return n;
+}
+
+// ─── TOP-LEVEL DECLARATION ───────────────────────────────────────────────────
+
+private *AstNode parse_decl(p: *Parser) {
+    let line: int = (*p).current.line;
+    let col:  int = (*p).current.col;
+
+    if p_match(p, TOK_IMPL) == 1 { return parse_impl_decl(p); }
+
+    let access: int = ACCESS_PRIVATE;
+    let k: int = (*p).current.kind;
+    if k == TOK_PUBLIC   { access = ACCESS_PUBLIC;   p_advance(p); }
+    if k == TOK_PRIVATE  { access = ACCESS_PRIVATE;  p_advance(p); }
+    if k == TOK_INTERNAL { access = ACCESS_INTERNAL; p_advance(p); }
+
+    k = (*p).current.kind;
+    if p_match(p, TOK_STRUCT)    == 1 { return parse_struct_decl(p, access); }
+    if p_match(p, TOK_UNION)     == 1 { return parse_union_decl(p, access); }
+    if p_match(p, TOK_ENUM)      == 1 { return parse_enum_decl(p, access); }
+    if p_match(p, TOK_INTERFACE) == 1 { return parse_interface_decl(p, access); }
+    if p_match(p, TOK_IMPL)      == 1 { return parse_impl_decl(p); }
+
+    if p_match(p, TOK_FN) == 1 {
+        let fname: Token = p_expect(p, TOK_IDENT, c"expected function name");
+        return parse_func_decl(p, access, null, tok_dup(p, fname));
+    }
+
+    if p_match(p, TOK_CONST) == 1 {
+        let n: *AstNode = node_alloc((*p).arena, NK_VAR_DECL, line, col);
+        let nt: Token = p_expect(p, TOK_IDENT, c"expected constant name");
+        (*n).payload.var_d.access   = access;
+        (*n).payload.var_d.name     = tok_dup(p, nt);
+        (*n).payload.var_d.is_const = 1;
+        if p_match(p, TOK_COLON) == 1 { (*n).payload.var_d.type = parse_type(p); }
+        p_expect(p, TOK_ASSIGN, c"expected '='");
+        (*n).payload.var_d.value = parse_expr(p);
+        p_expect(p, TOK_SEMICOLON, c"expected ';'");
+        return n;
+    }
+
+    if p_match(p, TOK_LET) == 1 {
+        let n: *AstNode = node_alloc((*p).arena, NK_VAR_DECL, line, col);
+        let nt: Token = p_expect(p, TOK_IDENT, c"expected variable name");
+        (*n).payload.var_d.access   = access;
+        (*n).payload.var_d.name     = tok_dup(p, nt);
+        (*n).payload.var_d.is_const = 0;
+        if p_match(p, TOK_COLON) == 1  { (*n).payload.var_d.type  = parse_type(p); }
+        if p_match(p, TOK_ASSIGN) == 1 { (*n).payload.var_d.value = parse_expr(p); }
+        p_expect(p, TOK_SEMICOLON, c"expected ';'");
+        return n;
+    }
+
+    // Function — disambiguate return type vs func name
+    let cur_is_type: int = k >= TOK_TYPE_INT && k <= TOK_TYPE_ANY;
+    let ret: *AstType = null;
+    let func_name: *int = null;
+
+    if cur_is_type == 1 || k == TOK_STAR {
+        ret = parse_type(p);
+        let nt: Token = p_expect(p, TOK_IDENT, c"expected function name");
+        func_name = tok_dup(p, nt);
+    } else {
+        if k == TOK_IDENT {
+            let first_tok: Token = (*p).current;
+            let first_name: *int = tok_dup(p, first_tok);
+            p_advance(p);
+            let nk: int = (*p).current.kind;
+            if nk == TOK_LPAREN || nk == TOK_LT {
+                func_name = first_name;
+            } else {
+                ret = type_alloc((*p).arena, TK_NAMED);
+                (*ret).name = first_name;
+                let nt: Token = p_expect(p, TOK_IDENT, c"expected function name");
+                func_name = tok_dup(p, nt);
+            }
+        } else {
+            if k == TOK_TYPE_VOID {
+                p_advance(p);
+                ret = type_alloc((*p).arena, TK_VOID);
+            }
+            let nt: Token = p_expect(p, TOK_IDENT, c"expected function name");
+            func_name = tok_dup(p, nt);
+        }
+    }
+    return parse_func_decl(p, access, ret, func_name);
+}
+
+// ─── PROGRAM ROOT ─────────────────────────────────────────────────────────────
+
+public *AstNode ci_parse(p: *Parser) {
+    let root: *AstNode = node_alloc((*p).arena, NK_PROGRAM, 0, 0);
+    let cap:   int = 64;
+    let count: int = 0;
+    let decls: *int = arena_alloc((*p).arena, cap * 8) as *int;
+
+    while p_check(p, TOK_EOF) == 0 {
+        if count >= cap {
+            let nc: int = cap * 2;
+            let nd: *int = arena_alloc((*p).arena, nc * 8) as *int;
+            let ci: int = 0;
+            while ci < count { *(nd + ci) = *(decls + ci); ci = ci + 1; }
+            decls = nd; cap = nc;
+        }
+
+        // using module;
+        if p_check(p, TOK_USING) == 1 {
+            p_advance(p);
+            let un: *AstNode = node_alloc((*p).arena, NK_USING, (*p).current.line, (*p).current.col);
+            let utok: Token = p_expect(p, TOK_IDENT, c"expected module name");
+            (*un).payload.using_d.path = tok_dup(p, utok);
+            while p_match(p, TOK_DOT) == 1 {
+                let next: Token = p_expect(p, TOK_IDENT, c"expected module name after '.'");
+                (*un).payload.using_d.path = tok_dup(p, next);
+            }
+            if p_match(p, TOK_AS) == 1 {
+                let alias: Token = p_expect(p, TOK_IDENT, c"expected alias");
+                (*un).payload.using_d.alias = tok_dup(p, alias);
+            }
+            p_expect(p, TOK_SEMICOLON, c"expected ';' after using");
+            *(decls + count) = un as int;
+            count = count + 1;
+            continue;
+        }
+
+        // module path;
+        if p_match(p, TOK_MODULE) == 1 {
+            let mn: *AstNode = node_alloc((*p).arena, NK_MODULE, (*p).previous.line, (*p).previous.col);
+            let mtok: Token = p_expect(p, TOK_IDENT, c"expected module name");
+            (*mn).payload.module_d.path = tok_dup(p, mtok);
+            while p_match(p, TOK_DOT) == 1 {
+                let next: Token = p_expect(p, TOK_IDENT, c"expected module name");
+                (*mn).payload.module_d.path = tok_dup(p, next);
+            }
+            p_expect(p, TOK_SEMICOLON, c"expected ';'");
+            *(decls + count) = mn as int;
+            count = count + 1;
+            continue;
+        }
+
+        if p_check(p, TOK_IMPL) == 1 {
+            p_advance(p);
+            let d: *AstNode = parse_impl_decl(p);
+            if d != null { *(decls + count) = d as int; count = count + 1; }
+            if (*p).panic_mode == 1 { p_sync(p); }
+            continue;
+        }
+
+        if p_check(p, TOK_INTERFACE) == 1 {
+            p_advance(p);
+            let d: *AstNode = parse_interface_decl(p, ACCESS_PUBLIC);
+            if d != null { *(decls + count) = d as int; count = count + 1; }
+            if (*p).panic_mode == 1 { p_sync(p); }
+            continue;
+        }
+
+        let ck: int = (*p).current.kind;
+        if ck == TOK_PUBLIC || ck == TOK_PRIVATE || ck == TOK_INTERNAL {
+            let d: *AstNode = parse_decl(p);
+            if d != null { *(decls + count) = d as int; count = count + 1; }
+            if (*p).panic_mode == 1 { p_sync(p); }
+            continue;
+        }
+
+        p_error(p, c"expected top-level declaration");
+        p_sync(p);
+    }
+
+    (*root).payload.program.decls = decls;
+    (*root).payload.program.count = count;
+    return root;
+}

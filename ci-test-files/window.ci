@@ -1,0 +1,65 @@
+module main;
+
+using stdio;
+using memory;
+
+// ─── X11 SIGNATURES ──────────────────────────────────────────────────────────
+// We define these so Ciren's resolver doesn't choke. 
+// The linker (cc) will find the real ones in -lX11.
+
+public fn XOpenDisplay(display_name: cstr) -> *int;
+public fn XCreateSimpleWindow(display: *int, parent: int, x: int, y: int, w: int, h: int, bw: int, brd: int, bg: int) -> int;
+public fn XSelectInput(display: *int, w: int, event_mask: i64);
+public fn XMapWindow(display: *int, w: int);
+public fn XNextEvent(display: *int, event_return: *int);
+public fn XDefaultScreen(display: *int) -> int;
+public fn XRootWindow(display: *int, screen_num: int) -> int;
+public fn XWhitePixel(display: *int, screen_num: int) -> i64;
+public fn XBlackPixel(display: *int, screen_num: int) -> i64;
+public fn XStoreName(display: *int, w: int, title: cstr);
+
+// ─── MAIN ────────────────────────────────────────────────────────────────────
+
+public main() {
+    let dpy: *int = XOpenDisplay(null);
+    if dpy == null {
+        printf(c"Failed to open X display\n");
+        return 1;
+    }
+
+    let scr: int = XDefaultScreen(dpy);
+    let root: int = XRootWindow(dpy, scr);
+
+    // Create a 640x480 window
+    let win: int = XCreateSimpleWindow(
+        dpy, root, 0, 0, 640, 480, 0, 
+        XBlackPixel(dpy, scr) as int, 
+        XWhitePixel(dpy, scr) as int
+    );
+
+    XStoreName(dpy, win, c"Ciren X11 Window");
+
+    // ExposureMask (32768) | KeyPressMask (1)
+    XSelectInput(dpy, win, 32769 as i64);
+    XMapWindow(dpy, win);
+
+    // XEvent is a large union; 256 bytes is a safe buffer
+    let event: *int = malloc(256 as i64) as *int;
+    let running: int = 1;
+
+    printf(c"Window is open. Press any key in the window to exit.\n");
+
+    while running == 1 {
+        XNextEvent(dpy, event);
+        
+        // Match on the event type (the first int in the XEvent struct)
+        let type: int = *event;
+        if type == 2 { // KeyPress
+            running = 0;
+        }
+    }
+
+    free(event as *int);
+    printf(c"Window closed.\n");
+    return 0;
+}

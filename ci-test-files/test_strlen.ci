@@ -1,0 +1,8 @@
+using stdio;
+using string;
+
+public main() {
+    let n: i64 = strlen(c"hello");
+    printf(c"len = %d\n", n as int);
+    return 0;
+}

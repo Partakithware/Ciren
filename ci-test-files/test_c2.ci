@@ -1,0 +1,6 @@
+using stdio;
+using testconst2;
+public main() {
+    printf(c"A=%d B=%d C=%d\n", A, B, C);
+    return 0;
+}

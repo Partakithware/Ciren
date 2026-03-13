@@ -1,0 +1,18 @@
+./cirenc hello_world.ci && ./hello_world
+./cirenc structs.ci && ./structs
+./cirenc methods.ci && ./methods
+./cirenc loops_match.ci && ./loops_match
+./cirenc enums.ci && ./enums
+./cirenc pointers.ci && ./pointers
+./cirenc interfaces.ci && ./interfaces
+./cirenc generics.ci && ./generics
+./cirenc slices.ci && ./slices
+./cirenc test_module.ci && ./test_module
+./cirenc error_handling.ci && ./error_handling
+./cirenc test_union.ci && ./test_union
+./cirenc test_lexer_complete.ci && ./test_lexer_complete
+./cirenc test_ast.ci && ./test_ast
+./cirenc gtk_app.ci -lgtk-3 -lgdk-3 -lgobject-2.0 -lglib-2.0 -lgio-2.0 && ./gtk_app
+./cirenc ciren_term.ci -lgtk-3 -lgdk-3 -lvte-2.91 -lgio-2.0 -lgobject-2.0 -lglib-2.0 && ./ciren_term
+./cirenc ciren_ray.ci -lraylib -lGL -lm -lpthread -ldl -lrt -lX11 && ./ciren_ray
+

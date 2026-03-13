@@ -1,0 +1,43 @@
+using stdio;
+using raylib;
+
+// Defining a native Ciren struct that matches Raylib's Color layout
+public struct CirenColor {
+    r: u8,
+    g: u8,
+    b: u8,
+    a: u8,
+}
+
+// Helper to create colors easily
+private CirenColor GetCirenGreen() {
+    let c: CirenColor;
+    c.r = 0;
+    c.g = 255;
+    c.b = 65;
+    c.a = 255;
+    return c;
+}
+
+public main() {
+    InitWindow(800, 450, c"Ciren: Struct Test");
+    SetTargetFPS(60);
+
+    // Let's use our new struct!
+    let my_color: CirenColor = GetCirenGreen();
+
+    while (WindowShouldClose() == 0) {
+        BeginDrawing();
+        ClearBackground(GetColor(0x181818FF)); 
+
+        // DrawText usually takes a Color struct. 
+        // We'll see if your FFI can pass our CirenColor directly!
+        DrawRectangle(300, 250, 200, 100, my_color);
+        
+        DrawText(c"Struct-based Rendering: Active", 10, 10, 20, GetColor(0xFFFFFFFF));
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
+}

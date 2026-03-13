@@ -1,0 +1,14 @@
+module mem;
+using memory;
+
+public *int alloc_ints(n: int) {
+    return malloc((n * 4) as i64) as *int;
+}
+
+public void dealloc(p: *int) {
+    free(p);
+}
+
+public void zero(p: *int, size: int) {
+    memset(p, 0, size as i64);
+}

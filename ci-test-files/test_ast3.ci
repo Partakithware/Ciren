@@ -1,0 +1,9 @@
+using stdio;
+using ast;
+
+public main() {
+    let x: int = NK_PROGRAM;
+    printf(c"NK_PROGRAM=%d\n", x);
+    printf(c"NK_FUNC_DECL=%d\n", NK_FUNC_DECL);
+    return 0;
+}

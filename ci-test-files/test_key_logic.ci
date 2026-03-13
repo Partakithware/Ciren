@@ -1,0 +1,21 @@
+using stdio;
+
+public main() {
+    let x: int = 0;
+    
+    printf(c"Enter a number: ");
+    
+    // We pass the address of 'x' to scanf.
+    // If & works, scanf will write directly into x's memory.
+    scanf(c"%d", &x);
+    
+    printf(c"The value of x is now: %d\n", x);
+
+    if (x != 0) {
+        printf(c"SUCCESS: Memory was modified via address-of (&)!\n");
+    } else {
+        printf(c"STILL ZERO: Memory was not modified.\n");
+    }
+
+    return 0;
+}

@@ -1,0 +1,66 @@
+using stdio;
+
+public main() {
+    // ── for range ──────────────────────────────
+    let sum = 0;
+    for i in 0..10 {
+        sum = sum + i;
+    }
+    printf(c"sum 0..10 = %d\n", sum);
+
+    // ── for range inclusive ────────────────────
+    let sum2 = 0;
+    for i in 1..=5 {
+        sum2 = sum2 + i;
+    }
+    printf(c"sum 1..=5 = %d\n", sum2);
+
+    // ── while ─────────────────────────────────
+    let n = 1;
+    let count = 0;
+    while n < 100 {
+        n = n * 2;
+        count = count + 1;
+    }
+    printf(c"doublings to reach 100 = %d\n", count);
+
+    // ── loop + break ──────────────────────────
+    let x = 0;
+    loop {
+        x = x + 1;
+        if x >= 5 {
+            break;
+        }
+    }
+    printf(c"loop break at x = %d\n", x);
+
+    // ── match integer ─────────────────────────
+    let val = 2;
+    match val {
+        1 => { printf(c"one\n"); },
+        2 => { printf(c"two\n"); },
+        3 => { printf(c"three\n"); },
+        _ => { printf(c"other\n"); },
+    }
+
+    // ── match with range pattern ───────────────
+    let score = 85;
+    match score {
+        90..=100 => { printf(c"grade: A\n"); },
+        80..=89  => { printf(c"grade: B\n"); },
+        70..=79  => { printf(c"grade: C\n"); },
+        _        => { printf(c"grade: F\n"); },
+    }
+
+    // ── nested loop with continue ──────────────
+    let evens = 0;
+    for i in 0..10 {
+        if i * 2 != i + i {
+            continue;
+        }
+        evens = evens + 1;
+    }
+    printf(c"evens counted = %d\n", evens);
+
+    return 0;
+}

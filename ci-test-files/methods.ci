@@ -1,0 +1,60 @@
+using stdio;
+
+public struct Vec2 {
+    x: f64,
+    y: f64,
+}
+
+private f64 vec2_length(self: Vec2) {
+    return self.x * self.x + self.y * self.y;
+}
+
+private Vec2 vec2_scale(self: Vec2, s: f64) {
+    return Vec2 { x: self.x * s, y: self.y * s };
+}
+
+private f64 vec2_dot(self: Vec2, other: Vec2) {
+    return self.x * other.x + self.y * other.y;
+}
+
+public struct Rect {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+private f64 rect_area(self: Rect) {
+    return self.width * self.height;
+}
+
+private int rect_contains(self: Rect, p: Vec2) {
+    return p.x >= self.x && p.x <= self.x + self.width &&
+           p.y >= self.y && p.y <= self.y + self.height;
+}
+
+public main() {
+    let v = Vec2 { x: 3.0, y: 4.0 };
+    let len = v.vec2_length();
+    printf(c"length squared = %f\n", len);
+
+    let scaled = v.vec2_scale(2.0);
+    printf(c"scaled.x = %f\n", scaled.x);
+    printf(c"scaled.y = %f\n", scaled.y);
+
+    let a = Vec2 { x: 1.0, y: 0.0 };
+    let b = Vec2 { x: 0.0, y: 1.0 };
+    let d = a.vec2_dot(b);
+    printf(c"dot = %f\n", d);
+
+    let r = Rect { x: 0.0, y: 0.0, width: 10.0, height: 5.0 };
+    let area = r.rect_area();
+    printf(c"area = %f\n", area);
+
+    let p  = Vec2 { x: 3.0, y: 3.0 };
+    let p2 = Vec2 { x: 11.0, y: 3.0 };
+    printf(c"contains p  = %d\n", r.rect_contains(p));
+    printf(c"contains p2 = %d\n", r.rect_contains(p2));
+
+    return 0;
+}

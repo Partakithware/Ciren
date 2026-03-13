@@ -1,0 +1,8 @@
+using stdio;
+using lexer;
+
+public main() {
+    let x: int = 42;
+    printf(c"x=%d\n", x);
+    return 0;
+}

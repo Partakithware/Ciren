@@ -1,0 +1,10 @@
+using stdio;
+using memory;
+using lexer;
+
+public main() {
+    let buf: *int = malloc(64) as *int;
+    printf(c"ok\n");
+    free(buf);
+    return 0;
+}

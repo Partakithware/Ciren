@@ -1,0 +1,3 @@
+module testconst3;
+public const FIRST: int = 0;
+public const SECOND: int = 1;

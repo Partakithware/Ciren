@@ -1,0 +1,15 @@
+using stdio;
+
+public union Value {
+    i: int,
+    f: f64,
+}
+
+public main() {
+    let v: Value;
+    v.i = 42;
+    printf(c"v.i = %d\n", v.i);
+    v.f = 3.14;
+    printf(c"v.f = %f\n", v.f);
+    return 0;
+}

@@ -1,0 +1,16 @@
+using stdio;
+using memory;
+using lexer;
+using ast;
+using parser;
+
+public main() {
+    let src: cstr = c"public main() { return 0; }";
+    let a: *Arena = arena_create(1024 * 1024);
+    let lx: *Lexer = lexer_create(src, c"test");
+    let p: *Parser = parser_create(lx, a, c"test");
+    let root: *AstNode = ci_parse(p);
+    printf(c"kind=%d count=%d had_error=%d\n",
+           (*root).kind, (*root).payload.program.count, (*p).had_error);
+    return 0;
+}

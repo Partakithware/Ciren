@@ -1,0 +1,34 @@
+using stdio;
+using memory;
+using raylib;
+
+public main() {
+    let width: int = 800;
+    let height: int = 450;
+
+    InitWindow(width, height, c"Ciren + Raylib: Hex & Type Promotion");
+
+    // Hex literals are back! 
+    // Testing the new parser logic:
+    let bg_color: int = 0x181818FF;
+    let ciren_green: int = 0x00FF41FF;
+    let white: int = 0xFFFFFFFF;
+
+    SetTargetFPS(60);
+
+    // Testing the new type promotion: 
+    // WindowShouldClose (i64) == 0 (i32) should now be legal!
+    while (WindowShouldClose() == 0) {
+        BeginDrawing();
+        
+        ClearBackground(GetColor(bg_color));
+
+        DrawText(c"Hex Literals & Implicit Promotion: OK", 150, 200, 20, GetColor(white));
+        DrawRectangle(300, 250, 200, 100, GetColor(ciren_green));
+        
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
+}

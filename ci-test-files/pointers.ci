@@ -1,0 +1,48 @@
+using stdio;
+
+private void increment(p: *int) {
+    *p = *p + 1;
+}
+
+private int sum_array(arr: *int, len: int) {
+    let total = 0;
+    for i in 0..len {
+        total = total + *(arr + i);
+    }
+    return total;
+}
+
+public struct Node {
+    value: int,
+    next: *Node,
+}
+
+private Node make_node(v: int) {
+    return Node { value: v, next: null };
+}
+
+public main() {
+    // Basic pointer: &x, *p
+    let x = 42;
+    let p = &x;
+    increment(p);
+    printf(c"x after increment = %d\n", x);
+
+    // Pointer arithmetic + array
+    let arr: [int; 4] = [10, 20, 30, 40];
+    let arrp = &arr[0];
+    printf(c"sum = %d\n", sum_array(arrp, 4));
+
+    // Null pointer check
+    let np: *int = null;
+    if np == null {
+        printf(c"null pointer ok\n");
+    }
+
+    // Pointer to struct
+    let n = make_node(99);
+    let np2 = &n;
+    printf(c"node value = %d\n", (*np2).value);
+
+    return 0;
+}

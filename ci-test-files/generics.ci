@@ -1,0 +1,51 @@
+using stdio;
+
+interface Printable {
+    fn to_str(self: Self) -> str;
+}
+
+public struct Point {
+    x: f64,
+    y: f64,
+}
+
+public struct Color {
+    r: int,
+    g: int,
+    b: int,
+}
+
+impl Printable for Point {
+    fn to_str(self: Point) -> str {
+        return "point";
+    }
+}
+
+impl Printable for Color {
+    fn to_str(self: Color) -> str {
+        return "color";
+    }
+}
+
+private fn describe<T: Printable>(val: T) {
+    printf(c"item: %s\n", val.to_str());
+}
+
+private fn identity<T>(val: T) -> T {
+    return val;
+}
+
+public main() {
+    let p = Point { x: 1.0, y: 2.0 };
+    let c = Color { r: 255, g: 0, b: 128 };
+
+    describe(p);
+    describe(c);
+
+    let x = identity(42);
+    let y = identity(3.14);
+    printf(c"identity int = %d\n", x);
+    printf(c"identity float = %f\n", y);
+
+    return 0;
+}

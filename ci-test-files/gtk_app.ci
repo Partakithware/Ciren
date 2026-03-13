@@ -1,0 +1,70 @@
+using stdio;
+using gtk;
+using memory;
+
+public struct AppState {
+    count: int,
+    label: *int,
+    history: *int, 
+}
+
+private void update_history(data: *AppState, val: int) {
+    let base: *int = (*data).history;
+    // Shift and update
+    *(base + 2) = *(base + 1);
+    *(base + 1) = *(base + 0);
+    *(base + 0) = val;
+}
+
+private void on_increment(btn: *int, data: *AppState) {
+    (*data).count = (*data).count + 1;
+    update_history(data, (*data).count);
+    
+    let buf: *int = malloc(64 as i64) as *int;
+    let h: *int = (*data).history;
+    
+    // Now that it's zeroed, these will look correct!
+    sprintf(buf as cstr, c"Current: %d | Prev: %d, %d", (*data).count, *(h + 1), *(h + 2));
+    gtk_label_set_text((*data).label, buf as cstr);
+}
+
+private void on_activate(app: *int, user_data: *int) {
+    let win: *int = gtk_application_window_new(app) as *int;
+    gtk_window_set_title(win, c"Ciren Pro Terminal");
+    gtk_window_set_default_size(win, 500, 250);
+
+    // CSS Styling - Make it look like a terminal
+    let provider: *int = gtk_css_provider_new() as *int;
+    gtk_css_provider_load_from_data(provider, c"window { background-color: #1a1a1a; } label { color: #00ff00; font-family: monospace; font-size: 18px; }", -1, null);
+    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), provider, 800);
+
+    let box: *int = gtk_box_new(1, 20) as *int;
+    gtk_container_set_border_width(box, 30);
+    gtk_container_add(win, box);
+
+    let state: *AppState = malloc(32 as i64) as *AppState;
+    (*state).count = 0;
+    (*state).label = gtk_label_new(c"SYSTEM READY_") as *int;
+    
+    // Initialize history to ZERO to fix the junk numbers
+    (*state).history = malloc(20 as i64) as *int;
+    let i: int = 0;
+    while i < 5 {
+        *((*state).history + i) = 0;
+        i = i + 1;
+    }
+    
+    let btn: *int = gtk_button_new_with_label(c"PULSE") as *int;
+    g_signal_connect_data(btn, c"clicked", on_increment as *int, state as *int, null, 0);
+
+    gtk_box_pack_start(box, (*state).label, 1, 1, 0);
+    gtk_box_pack_start(box, btn, 0, 0, 0);
+
+    gtk_widget_show_all(win);
+}
+
+public main() {
+    let app: *int = gtk_application_new(c"org.ciren.pro", 0) as *int;
+    g_signal_connect_data(app, c"activate", on_activate as *int, null, null, 0);
+    return g_application_run(app, 0, null) as int;
+}

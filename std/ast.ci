@@ -1,0 +1,580 @@
+module ast;
+using memory;
+using stdio;
+
+// ─── NODE KIND CONSTANTS ──────────────────────────────────────────────────────
+
+public const NK_PROGRAM: int = 0;
+public const NK_USING: int = 1;
+public const NK_MODULE: int = 2;
+public const NK_FUNC_DECL: int = 3;
+public const NK_ASM_FUNC_DECL: int = 4;
+public const NK_STRUCT_DECL: int = 5;
+public const NK_UNION_DECL: int = 6;
+public const NK_ENUM_DECL: int = 7;
+public const NK_ENUM_LITERAL: int = 8;
+public const NK_ENUM_PATTERN: int = 9;
+public const NK_INTERFACE_DECL: int = 10;
+public const NK_IMPL_DECL: int = 11;
+public const NK_VAR_DECL: int = 12;
+public const NK_BLOCK: int = 13;
+public const NK_RETURN: int = 14;
+public const NK_IF: int = 15;
+public const NK_WHILE: int = 16;
+public const NK_FOR_RANGE: int = 17;
+public const NK_FOR_IN: int = 18;
+public const NK_LOOP: int = 19;
+public const NK_MATCH: int = 20;
+public const NK_BREAK: int = 21;
+public const NK_CONTINUE: int = 22;
+public const NK_DEFER: int = 23;
+public const NK_PANIC: int = 24;
+public const NK_EXPR_STMT: int = 25;
+public const NK_INT_LIT: int = 26;
+public const NK_FLOAT_LIT: int = 27;
+public const NK_STRING_LIT: int = 28;
+public const NK_CSTRING_LIT: int = 29;
+public const NK_CHAR_LIT: int = 30;
+public const NK_BOOL_LIT: int = 31;
+public const NK_NULL_LIT: int = 32;
+public const NK_IDENT: int = 33;
+public const NK_BINARY: int = 34;
+public const NK_UNARY: int = 35;
+public const NK_ASSIGN: int = 36;
+public const NK_CALL: int = 37;
+public const NK_INDEX: int = 38;
+public const NK_FIELD: int = 39;
+public const NK_CAST: int = 40;
+public const NK_RANGE: int = 41;
+public const NK_STRUCT_LIT: int = 42;
+public const NK_ARRAY_LIT: int = 43;
+public const NK_IF_EXPR: int = 44;
+public const NK_PROPAGATE: int = 45;
+public const NK_SIZEOF: int = 46;
+public const NK_ADDRESS_OF: int = 47;
+public const NK_DEREF: int = 48;
+public const NK_NEW: int = 49;
+public const NK_DELETE: int = 50;
+
+// ─── TYPE KIND CONSTANTS ──────────────────────────────────────────────────────
+
+public const TK_INT: int = 0;
+public const TK_UINT: int = 1;
+public const TK_I8: int = 2;
+public const TK_U8: int = 3;
+public const TK_I16: int = 4;
+public const TK_U16: int = 5;
+public const TK_I64: int = 6;
+public const TK_U64: int = 7;
+public const TK_F32: int = 8;
+public const TK_F64: int = 9;
+public const TK_BOOL: int = 10;
+public const TK_CHAR: int = 11;
+public const TK_STR: int = 12;
+public const TK_CSTR: int = 13;
+public const TK_VOID: int = 14;
+public const TK_ANY: int = 15;
+public const TK_NAMED: int = 16;
+public const TK_POINTER: int = 17;
+public const TK_NULLABLE_PTR: int = 18;
+public const TK_ARRAY: int = 19;
+public const TK_SLICE: int = 20;
+public const TK_FUNC_PTR: int = 21;
+public const TK_GENERIC: int = 22;
+public const TK_INFERRED: int = 23;
+
+// ─── ACCESS MOD CONSTANTS ─────────────────────────────────────────────────────
+
+public const ACCESS_PUBLIC: int = 0;
+public const ACCESS_PRIVATE: int = 1;
+public const ACCESS_INTERNAL: int = 2;
+
+// ─── ARENA ────────────────────────────────────────────────────────────────────
+
+public struct Arena {
+    base: *int,
+    used: int,
+    capacity: int,
+}
+
+public *Arena arena_create(cap: int) {
+    let a: *Arena = malloc(12) as *Arena;
+    let buf: *int = malloc(cap) as *int;
+    (*a).base = buf;
+    (*a).used = 0;
+    (*a).capacity = cap;
+    return a;
+}
+
+public *int arena_alloc(a: *Arena, size: int) {
+    // align to 8 bytes
+    let aligned: int = size + 7;
+    aligned = aligned & -8;
+    if (*a).used + aligned > (*a).capacity {
+        printf(c"[ast] arena out of memory\n");
+        return null;
+    }
+    let ptr: *int = ((*a).base + (*a).used) as *int;
+    (*a).used = (*a).used + aligned;
+    return ptr;
+}
+
+// ─── ASTTYPE ──────────────────────────────────────────────────────────────────
+
+public struct AstType {
+    kind: int,
+    name: *int,
+    inner: *AstType,
+}
+
+public *AstType type_alloc(a: *Arena, kind: int) {
+    let t: *AstType = arena_alloc(a, 24) as *AstType;
+    (*t).kind = kind;
+    (*t).name = null;
+    (*t).inner = null;
+    return t;
+}
+
+public *AstType type_named(a: *Arena, name: *int) {
+    let t: *AstType = type_alloc(a, TK_NAMED);
+    (*t).name = name;
+    return t;
+}
+
+public *AstType type_pointer(a: *Arena, inner: *AstType) {
+    let t: *AstType = type_alloc(a, TK_POINTER);
+    (*t).inner = inner;
+    return t;
+}
+
+// ─── ASTPARAM ─────────────────────────────────────────────────────────────────
+
+public struct AstParam {
+    name: *int,
+    type: *AstType,
+    is_variadic: int,
+}
+
+// ─── ASTFIELD ─────────────────────────────────────────────────────────────────
+
+public struct AstField {
+    name: *int,
+    type: *AstType,
+}
+
+// ─── NODE PAYLOAD STRUCTS ─────────────────────────────────────────────────────
+
+public struct ProgramData {
+    decls: *int,
+    count: int,
+}
+
+public struct UsingData {
+    path: *int,
+    alias: *int,
+}
+
+public struct ModuleData {
+    path: *int,
+}
+
+public struct FuncData {
+    access: int,
+    name: *int,
+    params: *AstParam,
+    param_count: int,
+    return_type: *AstType,
+    body: *AstNode,
+    is_method: int,
+}
+
+public struct StructData {
+    access: int,
+    name: *int,
+    fields: *AstField,
+    field_count: int,
+    methods: *int,
+    method_count: int,
+}
+
+public struct EnumVariant {
+    name: *int,
+    has_value: int,
+    field_count: int,
+}
+
+public struct EnumData {
+    access: int,
+    name: *int,
+    variants: *EnumVariant,
+    variant_count: int,
+}
+
+public struct ImplData {
+    interface_name: *int,
+    type_name: *int,
+    methods: *int,
+    method_count: int,
+}
+
+public struct VarData {
+    access: int,
+    name: *int,
+    type: *AstType,
+    value: *AstNode,
+    is_const: int,
+}
+
+public struct BlockData {
+    stmts: *int,
+    count: int,
+}
+
+public struct RetData {
+    value: *AstNode,
+}
+
+public struct IfData {
+    condition: *AstNode,
+    then_block: *AstNode,
+    else_if_conds: *int,
+    else_if_blocks: *int,
+    else_if_count: int,
+    else_block: *AstNode,
+}
+
+public struct WhileData {
+    condition: *AstNode,
+    body: *AstNode,
+}
+
+public struct ForRangeData {
+    var_name: *int,
+    from: *AstNode,
+    to: *AstNode,
+    inclusive: int,
+    body: *AstNode,
+}
+
+public struct ForInData {
+    var_name: *int,
+    iterable: *AstNode,
+    body: *AstNode,
+}
+
+public struct LoopData {
+    label: *int,
+    body: *AstNode,
+}
+
+public struct MatchData {
+    subject: *AstNode,
+    arms: *int,
+    arm_count: int,
+}
+
+public struct JumpData {
+    label: *int,
+}
+
+public struct DeferData {
+    stmt: *AstNode,
+}
+
+public struct ExprStmtData {
+    expr: *AstNode,
+}
+
+public struct IntLitData {
+    value: i64,
+}
+
+public struct FloatLitData {
+    value: f64,
+}
+
+public struct StrLitData {
+    value: *int,
+}
+
+public struct BoolLitData {
+    value: int,
+}
+
+public struct IdentData {
+    name: *int,
+}
+
+public struct BinaryData {
+    op: int,
+    left: *AstNode,
+    right: *AstNode,
+}
+
+public struct UnaryData {
+    op: int,
+    operand: *AstNode,
+    postfix: int,
+}
+
+public struct AssignData {
+    op: int,
+    target: *AstNode,
+    value: *AstNode,
+}
+
+public struct CallData {
+    callee: *AstNode,
+    args: *int,
+    arg_count: int,
+}
+
+public struct FieldData {
+    target: *AstNode,
+    field: *int,
+}
+
+public struct IndexData {
+    target: *AstNode,
+    index: *AstNode,
+}
+
+public struct CastData {
+    expr: *AstNode,
+    type: *AstType,
+}
+
+public struct RangeData {
+    from: *AstNode,
+    to: *AstNode,
+    inclusive: int,
+}
+
+public struct StructLitData {
+    type_name: *int,
+    field_names: *int,
+    field_values: *int,
+    field_count: int,
+}
+
+public struct PropagateData {
+    expr: *AstNode,
+}
+
+public struct SizeofData {
+    type: *AstType,
+}
+
+public struct DeleteData {
+    ptr: *AstNode,
+}
+
+// ─── NODE PAYLOAD UNION ───────────────────────────────────────────────────────
+
+public union NodePayload {
+    program: ProgramData,
+    using_d: UsingData,
+    module_d: ModuleData,
+    func: FuncData,
+    struct_d: StructData,
+    enum_d: EnumData,
+    impl_d: ImplData,
+    var_d: VarData,
+    block: BlockData,
+    ret: RetData,
+    if_d: IfData,
+    while_d: WhileData,
+    for_range: ForRangeData,
+    for_in: ForInData,
+    loop_d: LoopData,
+    match_d: MatchData,
+    jump: JumpData,
+    defer_d: DeferData,
+    expr_stmt: ExprStmtData,
+    int_lit: IntLitData,
+    float_lit: FloatLitData,
+    str_lit: StrLitData,
+    bool_lit: BoolLitData,
+    ident: IdentData,
+    binary: BinaryData,
+    unary: UnaryData,
+    assign: AssignData,
+    call: CallData,
+    field: FieldData,
+    index: IndexData,
+    cast_d: CastData,
+    range: RangeData,
+    struct_lit: StructLitData,
+    propagate: PropagateData,
+    sizeof_d: SizeofData,
+    delete_d: DeleteData,
+}
+
+// ─── ASTNODE ──────────────────────────────────────────────────────────────────
+
+public struct AstNode {
+    kind: int,
+    line: int,
+    col: int,
+    payload: NodePayload,
+}
+
+public *AstNode node_alloc(a: *Arena, kind: int, line: int, col: int) {
+    let n: *AstNode = arena_alloc(a, 320) as *AstNode;
+    (*n).kind = kind;
+    (*n).line = line;
+    (*n).col = col;
+    return n;
+}
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+
+public void ast_print_indent(indent: int) {
+    let i: int = 0;
+    while i < indent {
+        printf(c"  ");
+        i = i + 1;
+    }
+}
+
+private cstr ast_kind_name(k: int) {
+    let running: int = 1;
+    let result: cstr = c"";
+    if k == NK_PROGRAM { result = c"Program"; running = 0; }
+    if running == 1 && k == NK_USING { result = c"Using"; running = 0; }
+    if running == 1 && k == NK_MODULE { result = c"Module"; running = 0; }
+    if running == 1 && k == NK_FUNC_DECL { result = c"FuncDecl"; running = 0; }
+    if running == 1 && k == NK_STRUCT_DECL { result = c"StructDecl"; running = 0; }
+    if running == 1 && k == NK_UNION_DECL { result = c"UnionDecl"; running = 0; }
+    if running == 1 && k == NK_ENUM_DECL { result = c"EnumDecl"; running = 0; }
+    if running == 1 && k == NK_INTERFACE_DECL { result = c"InterfaceDecl"; running = 0; }
+    if running == 1 && k == NK_IMPL_DECL { result = c"ImplDecl"; running = 0; }
+    if running == 1 && k == NK_VAR_DECL { result = c"VarDecl"; running = 0; }
+    if running == 1 && k == NK_BLOCK { result = c"Block"; running = 0; }
+    if running == 1 && k == NK_RETURN { result = c"Return"; running = 0; }
+    if running == 1 && k == NK_IF { result = c"If"; running = 0; }
+    if running == 1 && k == NK_WHILE { result = c"While"; running = 0; }
+    if running == 1 && k == NK_FOR_RANGE { result = c"ForRange"; running = 0; }
+    if running == 1 && k == NK_FOR_IN { result = c"ForIn"; running = 0; }
+    if running == 1 && k == NK_LOOP { result = c"Loop"; running = 0; }
+    if running == 1 && k == NK_MATCH { result = c"Match"; running = 0; }
+    if running == 1 && k == NK_BREAK { result = c"Break"; running = 0; }
+    if running == 1 && k == NK_CONTINUE { result = c"Continue"; running = 0; }
+    if running == 1 && k == NK_DEFER { result = c"Defer"; running = 0; }
+    if running == 1 && k == NK_EXPR_STMT { result = c"ExprStmt"; running = 0; }
+    if running == 1 && k == NK_INT_LIT { result = c"IntLit"; running = 0; }
+    if running == 1 && k == NK_FLOAT_LIT { result = c"FloatLit"; running = 0; }
+    if running == 1 && k == NK_STRING_LIT { result = c"StrLit"; running = 0; }
+    if running == 1 && k == NK_BOOL_LIT { result = c"BoolLit"; running = 0; }
+    if running == 1 && k == NK_NULL_LIT { result = c"Null"; running = 0; }
+    if running == 1 && k == NK_IDENT { result = c"Ident"; running = 0; }
+    if running == 1 && k == NK_BINARY { result = c"Binary"; running = 0; }
+    if running == 1 && k == NK_UNARY { result = c"Unary"; running = 0; }
+    if running == 1 && k == NK_ASSIGN { result = c"Assign"; running = 0; }
+    if running == 1 && k == NK_CALL { result = c"Call"; running = 0; }
+    if running == 1 && k == NK_FIELD { result = c"Field"; running = 0; }
+    if running == 1 && k == NK_INDEX { result = c"Index"; running = 0; }
+    if running == 1 && k == NK_CAST { result = c"Cast"; running = 0; }
+    if running == 1 && k == NK_RANGE { result = c"Range"; running = 0; }
+    if running == 1 && k == NK_STRUCT_LIT { result = c"StructLit"; running = 0; }
+    if running == 1 && k == NK_PROPAGATE { result = c"Propagate"; running = 0; }
+    if running == 1 && k == NK_ADDRESS_OF { result = c"AddressOf"; running = 0; }
+    if running == 1 && k == NK_DEREF { result = c"Deref"; running = 0; }
+    if running == 1 { result = c"Node"; }
+    return result;
+}
+
+public void ast_print(n: *AstNode, indent: int) {
+    if n == null {
+        return;
+    }
+    ast_print_indent(indent);
+    printf(c"%s\n", ast_kind_name((*n).kind));
+}
+
+// ─── MISSING PAYLOAD STRUCTS ──────────────────────────────────────────────────
+
+public struct AsmFuncData {
+    access: int,
+    name: *int,
+    body: *int,
+}
+
+public struct EnumLitData {
+    enum_name: *int,
+    variant: *int,
+    args: *int,
+    arg_count: int,
+}
+
+public struct EnumPatternData {
+    enum_name: *int,
+    variant: *int,
+    bindings: *int,
+    binding_count: int,
+}
+
+public struct InterfaceData {
+    access: int,
+    name: *int,
+    methods: *int,
+    method_count: int,
+}
+
+public struct PanicData {
+    msg: *AstNode,
+}
+
+public struct AsmBlockData {
+    body: *int,
+}
+
+public struct CharLitData {
+    value: int,
+}
+
+public struct ArrayLitData {
+    elems: *int,
+    count: int,
+}
+
+public struct SliceExprData {
+    target: *AstNode,
+    from: *AstNode,
+    to: *AstNode,
+    inclusive: int,
+}
+
+public struct LambdaData {
+    params: *AstParam,
+    param_count: int,
+    body: *AstNode,
+    is_expr: int,
+}
+
+public struct MultiAssignData {
+    names: *int,
+    count: int,
+    value: *AstNode,
+}
+
+public struct ForIndexData {
+    index_var: *int,
+    value_var: *int,
+    iterable: *AstNode,
+    body: *AstNode,
+}
+
+public struct ForCData {
+    init: *AstNode,
+    condition: *AstNode,
+    post: *AstNode,
+    body: *AstNode,
+}
+
+public struct NewData {
+    type_name: *int,
+    field_names: *int,
+    field_values: *int,
+    field_count: int,
+}

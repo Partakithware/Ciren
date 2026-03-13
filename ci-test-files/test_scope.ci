@@ -1,0 +1,12 @@
+using stdio;
+using memory;
+using lexer;
+
+public main() {
+    let code: *int = malloc(256) as *int;
+    let s: *int = code;
+    *(s+0) = 42;
+    printf(c"ok %d\n", *(s+0));
+    free(code);
+    return 0;
+}

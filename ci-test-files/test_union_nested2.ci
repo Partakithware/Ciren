@@ -1,0 +1,26 @@
+using stdio;
+
+public struct FuncData {
+    param_count: int,
+    is_method: int,
+}
+
+public struct BlockData {
+    stmt_count: int,
+}
+
+public union NodePayload {
+    func: FuncData,
+    block: BlockData,
+    int_val: int,
+}
+
+public main() {
+    let p: NodePayload;
+    p.func = FuncData { param_count: 3, is_method: 1 };
+    printf(c"param_count = %d\n", p.func.param_count);
+    printf(c"is_method = %d\n", p.func.is_method);
+    p.block = BlockData { stmt_count: 7 };
+    printf(c"stmt_count = %d\n", p.block.stmt_count);
+    return 0;
+}

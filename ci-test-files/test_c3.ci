@@ -1,0 +1,6 @@
+using stdio;
+using testconst3;
+public main() {
+    printf(c"FIRST=%d SECOND=%d\n", FIRST, SECOND);
+    return 0;
+}

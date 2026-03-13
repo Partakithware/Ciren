@@ -1,0 +1,635 @@
+module lexer;
+using stdio;
+using memory;
+using string;
+
+// ── Token kind constants ──────────────────────────────────────────────────────
+// Literals
+// 0   = TK_EOF
+// 100 = TK_IDENT
+// 101 = TK_INT_LIT
+// 102 = TK_FLOAT_LIT
+// 103 = TK_STRING_LIT
+// 104 = TK_CSTRING_LIT
+// 105 = TK_CHAR_LIT
+// 106 = TK_BOOL_LIT
+// 107 = TK_NULL
+// 999 = TK_ERROR
+//
+// Keywords (1-49)
+// 1=public 2=private 3=using 4=let 5=const 6=return 7=if 8=else
+// 9=for 10=while 11=loop 12=match 13=in 14=break 15=continue
+// 16=struct 17=enum 18=interface 19=module 20=impl 21=fn
+// 22=true 23=false 24=null_kw 25=as 26=asm 27=new 28=delete
+// 29=defer 30=panic 31=embed 32=clobbers 33=sizeof 34=alignof
+// 35=undefined 36=self 37=internal
+//
+// Types (50-79)
+// 50=int 51=uint 52=i8 53=u8 54=i16 55=u16 56=i64 57=u64
+// 58=f32 59=f64 60=bool 61=char 62=str 63=cstr 64=void 65=any
+//
+// Punctuation (200-299)
+// 200=( 201=) 202={ 203=} 204=[ 205=]
+// 206=, 207=; 208=. 209=#  210=@ 211=~  212=^
+//
+// Operators (213-299)
+// 213=+ 214=- 215=* 216=/ 217=% 218=& 219=|
+// 220=! 221=< 222=> 223== 224=?
+// 225=: 226=::
+// 227=.. 228=..=
+// 229=== 230=!= 231=<= 232=>= 233==>
+// 234=+= 235=-= 236=*= 237=/=
+// 238=++ 239=--
+// 240=&& 241=||
+// 242=<< 243=>>
+// 244=-> 245==
+
+public struct Token {
+    kind:      int,
+    start:     *int,
+    length:    int,
+    line:      int,
+    col:       int,
+    int_val:   i64,
+    float_val: f64,
+    str_val:   *int,
+}
+
+public struct Lexer {
+    source:  *int,
+    current: *int,
+    start:   *int,
+    line:    int,
+    col:     int,
+}
+
+public void lexer_init(l: *Lexer, source: *int) {
+    (*l).source  = source;
+    (*l).current = source;
+    (*l).start   = source;
+    (*l).line    = 1;
+    (*l).col     = 1;
+}
+
+private int lx_peek_char(l: *Lexer) {
+    return *((*l).current);
+}
+
+private int lx_peek_next(l: *Lexer) {
+    let c: int = *((*l).current);
+    if c == 0 { return 0; }
+    return *((*l).current + 1);
+}
+
+private int lx_at_end(l: *Lexer) {
+    return *((*l).current) == 0;
+}
+
+private int lx_advance(l: *Lexer) {
+    let c: int = *((*l).current);
+    (*l).current = (*l).current + 1;
+    if c == 10 {
+        (*l).line = (*l).line + 1;
+        (*l).col  = 1;
+    } else {
+        (*l).col = (*l).col + 1;
+    }
+    return c;
+}
+
+private Token lx_make_token(l: *Lexer, kind: int) {
+    let t: Token = Token {
+        kind:      kind,
+        start:     (*l).start,
+        length:    ((*l).current - (*l).start) / 4,
+        line:      (*l).line,
+        col:       (*l).col,
+        int_val:   0,
+        float_val: 0.0,
+        str_val:   null,
+    };
+    return t;
+}
+
+private Token lx_error_token(l: *Lexer) {
+    return lx_make_token(l, 999);
+}
+
+private int lx_is_space(c: int) {
+    return c == 32 || c == 13 || c == 9 || c == 10;
+}
+
+private void lx_skip(l: *Lexer) {
+    let running: int = 1;
+    while lx_at_end(l) == 0 && running == 1 {
+        let c: int = lx_peek_char(l);
+        if lx_is_space(c) == 1 {
+            lx_advance(l);
+        } else {
+            let n: int = lx_peek_next(l);
+            if c == 47 && n == 47 {
+                while lx_at_end(l) == 0 && lx_peek_char(l) != 10 {
+                    lx_advance(l);
+                }
+            } else {
+                if c == 47 && n == 42 {
+                    lx_advance(l);
+                    lx_advance(l);
+                    while lx_at_end(l) == 0 {
+                        if lx_peek_char(l) == 42 && lx_peek_next(l) == 47 {
+                            lx_advance(l);
+                            lx_advance(l);
+                            break;
+                        }
+                        lx_advance(l);
+                    }
+                } else {
+                    running = 0;
+                }
+            }
+        }
+    }
+}
+
+private bool lx_is_alpha(c: int) {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+}
+
+private bool lx_is_digit(c: int) {
+    return c >= 48 && c <= 57;
+}
+
+private bool lx_is_hexdigit(c: int) {
+    return (c >= 48 && c <= 57) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102);
+}
+
+// keyword lookup — returns kind or 0 for TK_IDENT
+private int lx_keyword(start: *int, len: int) {
+    if len == 2 {
+        // if
+        if *(start+0)==105 && *(start+1)==102 { return 7; }
+        // in
+        if *(start+0)==105 && *(start+1)==110 { return 13; }
+        // fn
+        if *(start+0)==102 && *(start+1)==110 { return 21; }
+        // as
+        if *(start+0)==97  && *(start+1)==115 { return 25; }
+    }
+    if len == 3 {
+        // let
+        if *(start+0)==108 && *(start+1)==101 && *(start+2)==116 { return 4; }
+        // for
+        if *(start+0)==102 && *(start+1)==111 && *(start+2)==114 { return 9; }
+        // str
+        if *(start+0)==115 && *(start+1)==116 && *(start+2)==114 { return 62; }
+        // i64
+        if *(start+0)==105 && *(start+1)==54  && *(start+2)==52  { return 56; }
+        // f64
+        if *(start+0)==102 && *(start+1)==54  && *(start+2)==52  { return 59; }
+        // asm
+        if *(start+0)==97  && *(start+1)==115 && *(start+2)==109 { return 26; }
+        // new
+        if *(start+0)==110 && *(start+1)==101 && *(start+2)==119 { return 27; }
+        // int
+        if *(start+0)==105 && *(start+1)==110 && *(start+2)==116 { return 50; }
+        // i8
+        if *(start+0)==105 && *(start+1)==56  { return 52; }
+        // u8
+        if *(start+0)==117 && *(start+1)==56  { return 53; }
+        // i16 — len 3
+        if *(start+0)==105 && *(start+1)==49 && *(start+2)==54 { return 54; }
+        // u16
+        if *(start+0)==117 && *(start+1)==49 && *(start+2)==54 { return 55; }
+        // u64
+        if *(start+0)==117 && *(start+1)==54 && *(start+2)==52 { return 57; }
+        // f32
+        if *(start+0)==102 && *(start+1)==51 && *(start+2)==50 { return 58; }
+        // any
+        if *(start+0)==97  && *(start+1)==110 && *(start+2)==121 { return 65; }
+    }
+    if len == 4 {
+        // else
+        if *(start+0)==101 && *(start+1)==108 && *(start+2)==115 && *(start+3)==101 { return 8; }
+        // loop
+        if *(start+0)==108 && *(start+1)==111 && *(start+2)==111 && *(start+3)==112 { return 11; }
+        // enum
+        if *(start+0)==101 && *(start+1)==110 && *(start+2)==117 && *(start+3)==109 { return 17; }
+        // true
+        if *(start+0)==116 && *(start+1)==114 && *(start+2)==117 && *(start+3)==101 { return 22; }
+        // void
+        if *(start+0)==118 && *(start+1)==111 && *(start+2)==105 && *(start+3)==100 { return 64; }
+        // bool
+        if *(start+0)==98  && *(start+1)==111 && *(start+2)==111 && *(start+3)==108 { return 60; }
+        // impl
+        if *(start+0)==105 && *(start+1)==109 && *(start+2)==112 && *(start+3)==108 { return 20; }
+        // uint
+        if *(start+0)==117 && *(start+1)==105 && *(start+2)==110 && *(start+3)==116 { return 51; }
+        // char
+        if *(start+0)==99  && *(start+1)==104 && *(start+2)==97  && *(start+3)==114 { return 61; }
+        // cstr
+        if *(start+0)==99  && *(start+1)==115 && *(start+2)==116 && *(start+3)==114 { return 63; }
+        // null
+        if *(start+0)==110 && *(start+1)==117 && *(start+2)==108 && *(start+3)==108 { return 107; }
+        // Self
+        if *(start+0)==83  && *(start+1)==101 && *(start+2)==108 && *(start+3)==102 { return 36; }
+        // self
+        if *(start+0)==115 && *(start+1)==101 && *(start+2)==108 && *(start+3)==102 { return 36; }
+    }
+    if len == 5 {
+        // while
+        if *(start+0)==119 && *(start+1)==104 && *(start+2)==105 && *(start+3)==108 && *(start+4)==101 { return 10; }
+        // match
+        if *(start+0)==109 && *(start+1)==97  && *(start+2)==116 && *(start+3)==99  && *(start+4)==104 { return 12; }
+        // break
+        if *(start+0)==98  && *(start+1)==114 && *(start+2)==101 && *(start+3)==97  && *(start+4)==107 { return 14; }
+        // const
+        if *(start+0)==99  && *(start+1)==111 && *(start+2)==110 && *(start+3)==115 && *(start+4)==116 { return 5; }
+        // false
+        if *(start+0)==102 && *(start+1)==97  && *(start+2)==108 && *(start+3)==115 && *(start+4)==101 { return 23; }
+        // using
+        if *(start+0)==117 && *(start+1)==115 && *(start+2)==105 && *(start+3)==110 && *(start+4)==103 { return 3; }
+        // defer
+        if *(start+0)==100 && *(start+1)==101 && *(start+2)==102 && *(start+3)==101 && *(start+4)==114 { return 29; }
+        // panic
+        if *(start+0)==112 && *(start+1)==97  && *(start+2)==110 && *(start+3)==105 && *(start+4)==99  { return 30; }
+        // embed
+        if *(start+0)==101 && *(start+1)==109 && *(start+2)==98  && *(start+3)==101 && *(start+4)==100 { return 31; }
+    }
+    if len == 6 {
+        // return
+        if *(start+0)==114 && *(start+1)==101 && *(start+2)==116 && *(start+3)==117 && *(start+4)==114 && *(start+5)==110 { return 6; }
+        // public
+        if *(start+0)==112 && *(start+1)==117 && *(start+2)==98  && *(start+3)==108 && *(start+4)==105 && *(start+5)==99  { return 1; }
+        // struct
+        if *(start+0)==115 && *(start+1)==116 && *(start+2)==114 && *(start+3)==117 && *(start+4)==99  && *(start+5)==116 { return 16; }
+        // module
+        if *(start+0)==109 && *(start+1)==111 && *(start+2)==100 && *(start+3)==117 && *(start+4)==108 && *(start+5)==101 { return 19; }
+        // delete
+        if *(start+0)==100 && *(start+1)==101 && *(start+2)==108 && *(start+3)==101 && *(start+4)==116 && *(start+5)==101 { return 28; }
+        // sizeof
+        if *(start+0)==115 && *(start+1)==105 && *(start+2)==122 && *(start+3)==101 && *(start+4)==111 && *(start+5)==102 { return 33; }
+    }
+    if len == 7 {
+        // private
+        if *(start+0)==112 && *(start+1)==114 && *(start+2)==105 && *(start+3)==118 && *(start+4)==97 && *(start+5)==116 && *(start+6)==101 { return 2; }
+        // alignof
+        if *(start+0)==97  && *(start+1)==108 && *(start+2)==105 && *(start+3)==103 && *(start+4)==110 && *(start+5)==111 && *(start+6)==102 { return 34; }
+        // clobbers — 8 chars actually
+    }
+    if len == 8 {
+        // continue
+        if *(start+0)==99 && *(start+1)==111 && *(start+2)==110 && *(start+3)==116 && *(start+4)==105 && *(start+5)==110 && *(start+6)==117 && *(start+7)==101 { return 15; }
+        // clobbers
+        if *(start+0)==99 && *(start+1)==108 && *(start+2)==111 && *(start+3)==98 && *(start+4)==98 && *(start+5)==101 && *(start+6)==114 && *(start+7)==115 { return 32; }
+        // internal
+        if *(start+0)==105 && *(start+1)==110 && *(start+2)==116 && *(start+3)==101 && *(start+4)==114 && *(start+5)==110 && *(start+6)==97 && *(start+7)==108 { return 37; }
+    }
+    if len == 9 {
+        // interface
+        if *(start+0)==105 && *(start+1)==110 && *(start+2)==116 && *(start+3)==101 && *(start+4)==114 && *(start+5)==102 && *(start+6)==97 && *(start+7)==99 && *(start+8)==101 { return 18; }
+        // undefined
+        if *(start+0)==117 && *(start+1)==110 && *(start+2)==100 && *(start+3)==101 && *(start+4)==102 && *(start+5)==105 && *(start+6)==110 && *(start+7)==101 && *(start+8)==100 { return 35; }
+    }
+    return 0;
+}
+
+private Token lx_scan_ident(l: *Lexer) {
+    while lx_is_alpha(lx_peek_char(l)) || lx_is_digit(lx_peek_char(l)) {
+        lx_advance(l);
+    }
+    let len: int = ((*l).current - (*l).start) / 4;
+    let kind: int = lx_keyword((*l).start, len);
+    if kind == 0 { kind = 100; }
+    return lx_make_token(l, kind);
+}
+
+private Token lx_scan_number(l: *Lexer, first: int) {
+    let is_float: int = 0;
+    // Hex: 0x...
+    if first == 48 && (lx_peek_char(l) == 120 || lx_peek_char(l) == 88) {
+        lx_advance(l);
+        while lx_is_hexdigit(lx_peek_char(l)) {
+            lx_advance(l);
+        }
+        let t: Token = lx_make_token(l, 101);
+        return t;
+    }
+    // Decimal digits
+    while lx_is_digit(lx_peek_char(l)) {
+        lx_advance(l);
+    }
+    // Float part
+    if lx_peek_char(l) == 46 && lx_is_digit(lx_peek_next(l)) {
+        is_float = 1;
+        lx_advance(l);
+        while lx_is_digit(lx_peek_char(l)) {
+            lx_advance(l);
+        }
+    }
+    // Exponent
+    if lx_peek_char(l) == 101 || lx_peek_char(l) == 69 {
+        is_float = 1;
+        lx_advance(l);
+        if lx_peek_char(l) == 43 || lx_peek_char(l) == 45 {
+            lx_advance(l);
+        }
+        while lx_is_digit(lx_peek_char(l)) {
+            lx_advance(l);
+        }
+    }
+    // Suffixes: u, f, i64, u64, i32 etc
+    if lx_peek_char(l) == 117 { lx_advance(l); }
+    if lx_peek_char(l) == 102 { is_float = 1; lx_advance(l); }
+    if lx_peek_char(l) == 105 || lx_peek_char(l) == 117 {
+        lx_advance(l);
+        while lx_is_digit(lx_peek_char(l)) {
+            lx_advance(l);
+        }
+    }
+    if is_float == 1 { return lx_make_token(l, 102); }
+    return lx_make_token(l, 101);
+}
+
+private Token lx_scan_string(l: *Lexer) {
+    while lx_at_end(l) == 0 && lx_peek_char(l) != 34 {
+        if lx_peek_char(l) == 92 { lx_advance(l); }
+        lx_advance(l);
+    }
+    if lx_at_end(l) == 0 { lx_advance(l); }
+    return lx_make_token(l, 103);
+}
+
+private Token lx_scan_cstring(l: *Lexer) {
+    // opening " already consumed
+    while lx_at_end(l) == 0 && lx_peek_char(l) != 34 {
+        if lx_peek_char(l) == 92 { lx_advance(l); }
+        lx_advance(l);
+    }
+    if lx_at_end(l) == 0 { lx_advance(l); }
+    return lx_make_token(l, 104);
+}
+
+private Token lx_scan_char(l: *Lexer) {
+    if lx_peek_char(l) == 92 {
+        lx_advance(l);
+        lx_advance(l);
+    } else {
+        lx_advance(l);
+    }
+    let t: Token = lx_make_token(l, 105);
+    if lx_peek_char(l) == 39 { lx_advance(l); }
+    return t;
+}
+
+public Token lexer_next(l: *Lexer) {
+    lx_skip(l);
+    (*l).start = (*l).current;
+    if lx_at_end(l) == 1 { return lx_make_token(l, 0); }
+    let c: int = lx_advance(l);
+
+    // c"..." cstring — must check before alpha scan swallows 'c'
+    if c == 99 && lx_peek_char(l) == 34 {
+        lx_advance(l);
+        return lx_scan_cstring(l);
+    }
+
+    if lx_is_alpha(c) { return lx_scan_ident(l); }
+    if lx_is_digit(c) { return lx_scan_number(l, c); }
+
+    // String
+    if c == 34 { return lx_scan_string(l); }
+
+    // Char literal  '
+    if c == 39 { return lx_scan_char(l); }
+
+    // Single-char punctuation
+    if c == 40  { return lx_make_token(l, 200); }   // (
+    if c == 41  { return lx_make_token(l, 201); }   // )
+    if c == 123 { return lx_make_token(l, 202); }   // {
+    if c == 125 { return lx_make_token(l, 203); }   // }
+    if c == 91  { return lx_make_token(l, 204); }   // [
+    if c == 93  { return lx_make_token(l, 205); }   // ]
+    if c == 44  { return lx_make_token(l, 206); }   // ,
+    if c == 59  { return lx_make_token(l, 207); }   // ;
+    if c == 35  { return lx_make_token(l, 209); }   // #
+    if c == 64  { return lx_make_token(l, 210); }   // @
+    if c == 126 { return lx_make_token(l, 211); }   // ~
+    if c == 94  { return lx_make_token(l, 212); }   // ^
+    if c == 37  { return lx_make_token(l, 217); }   // %
+    if c == 63  { return lx_make_token(l, 224); }   // ?
+
+    // Dot / range
+    if c == 46 {
+        if lx_peek_char(l) == 46 {
+            lx_advance(l);
+            if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 228); }  // ..=
+            return lx_make_token(l, 227);  // ..
+        }
+        return lx_make_token(l, 208);  // .
+    }
+
+    // Colon
+    if c == 58 {
+        if lx_peek_char(l) == 58 { lx_advance(l); return lx_make_token(l, 226); }  // ::
+        return lx_make_token(l, 225);  // :
+    }
+
+    // Plus
+    if c == 43 {
+        if lx_peek_char(l) == 43 { lx_advance(l); return lx_make_token(l, 238); }  // ++
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 234); }  // +=
+        return lx_make_token(l, 213);  // +
+    }
+
+    // Minus / arrow
+    if c == 45 {
+        if lx_peek_char(l) == 45 { lx_advance(l); return lx_make_token(l, 239); }  // --
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 235); }  // -=
+        if lx_peek_char(l) == 62 { lx_advance(l); return lx_make_token(l, 244); }  // ->
+        return lx_make_token(l, 214);  // -
+    }
+
+    // Star
+    if c == 42 {
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 236); }  // *=
+        return lx_make_token(l, 215);  // *
+    }
+
+    // Slash
+    if c == 47 {
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 237); }  // /=
+        return lx_make_token(l, 216);  // /
+    }
+
+    // Ampersand
+    if c == 38 {
+        if lx_peek_char(l) == 38 { lx_advance(l); return lx_make_token(l, 240); }  // &&
+        return lx_make_token(l, 218);  // &
+    }
+
+    // Pipe
+    if c == 124 {
+        if lx_peek_char(l) == 124 { lx_advance(l); return lx_make_token(l, 241); }  // ||
+        return lx_make_token(l, 219);  // |
+    }
+
+    // Bang
+    if c == 33 {
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 230); }  // !=
+        return lx_make_token(l, 220);  // !
+    }
+
+    // Less-than
+    if c == 60 {
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 231); }  // <=
+        if lx_peek_char(l) == 60 { lx_advance(l); return lx_make_token(l, 242); }  // <<
+        return lx_make_token(l, 221);  // <
+    }
+
+    // Greater-than
+    if c == 62 {
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 232); }  // >=
+        if lx_peek_char(l) == 62 { lx_advance(l); return lx_make_token(l, 243); }  // >>
+        return lx_make_token(l, 222);  // >
+    }
+
+    // Equals
+    if c == 61 {
+        if lx_peek_char(l) == 61 { lx_advance(l); return lx_make_token(l, 229); }  // ==
+        if lx_peek_char(l) == 62 { lx_advance(l); return lx_make_token(l, 233); }  // =>
+        return lx_make_token(l, 223);  // =
+    }
+
+    return lx_make_token(l, 999);
+}
+
+// Non-consuming peek — save/restore state
+public Token lexer_peek_tok(l: *Lexer) {
+    let saved_current: *int = (*l).current;
+    let saved_start:   *int = (*l).start;
+    let saved_line:    int  = (*l).line;
+    let saved_col:     int  = (*l).col;
+    let t: Token = lexer_next(l);
+    (*l).current = saved_current;
+    (*l).start   = saved_start;
+    (*l).line    = saved_line;
+    (*l).col     = saved_col;
+    return t;
+}
+
+// Debug: print a token's kind name and source span
+public void token_print(t: Token) {
+    let k: int = t.kind;
+    if k == 0   { printf(c"[EOF]\n"); return; }
+    if k == 100 { printf(c"IDENT      len=%d\n", t.length); return; }
+    if k == 101 { printf(c"INT_LIT    len=%d\n", t.length); return; }
+    if k == 102 { printf(c"FLOAT_LIT  len=%d\n", t.length); return; }
+    if k == 103 { printf(c"STRING_LIT len=%d\n", t.length); return; }
+    if k == 104 { printf(c"CSTR_LIT   len=%d\n", t.length); return; }
+    if k == 105 { printf(c"CHAR_LIT   len=%d\n", t.length); return; }
+    if k == 106 { printf(c"BOOL_LIT   len=%d\n", t.length); return; }
+    if k == 107 { printf(c"NULL\n"); return; }
+    if k == 999 { printf(c"ERROR\n"); return; }
+    // Keywords
+    if k == 1  { printf(c"public\n");    return; }
+    if k == 2  { printf(c"private\n");   return; }
+    if k == 3  { printf(c"using\n");     return; }
+    if k == 4  { printf(c"let\n");       return; }
+    if k == 5  { printf(c"const\n");     return; }
+    if k == 6  { printf(c"return\n");    return; }
+    if k == 7  { printf(c"if\n");        return; }
+    if k == 8  { printf(c"else\n");      return; }
+    if k == 9  { printf(c"for\n");       return; }
+    if k == 10 { printf(c"while\n");     return; }
+    if k == 11 { printf(c"loop\n");      return; }
+    if k == 12 { printf(c"match\n");     return; }
+    if k == 13 { printf(c"in\n");        return; }
+    if k == 14 { printf(c"break\n");     return; }
+    if k == 15 { printf(c"continue\n");  return; }
+    if k == 16 { printf(c"struct\n");    return; }
+    if k == 17 { printf(c"enum\n");      return; }
+    if k == 18 { printf(c"interface\n"); return; }
+    if k == 19 { printf(c"module\n");    return; }
+    if k == 20 { printf(c"impl\n");      return; }
+    if k == 21 { printf(c"fn\n");        return; }
+    if k == 22 { printf(c"true\n");      return; }
+    if k == 23 { printf(c"false\n");     return; }
+    if k == 25 { printf(c"as\n");        return; }
+    if k == 26 { printf(c"asm\n");       return; }
+    if k == 27 { printf(c"new\n");       return; }
+    if k == 28 { printf(c"delete\n");    return; }
+    if k == 29 { printf(c"defer\n");     return; }
+    if k == 30 { printf(c"panic\n");     return; }
+    if k == 31 { printf(c"embed\n");     return; }
+    if k == 32 { printf(c"clobbers\n");  return; }
+    if k == 33 { printf(c"sizeof\n");    return; }
+    if k == 34 { printf(c"alignof\n");   return; }
+    if k == 35 { printf(c"undefined\n"); return; }
+    if k == 36 { printf(c"self\n");      return; }
+    if k == 37 { printf(c"internal\n");  return; }
+    // Types
+    if k == 50 { printf(c"int\n");  return; }
+    if k == 51 { printf(c"uint\n"); return; }
+    if k == 52 { printf(c"i8\n");   return; }
+    if k == 53 { printf(c"u8\n");   return; }
+    if k == 54 { printf(c"i16\n");  return; }
+    if k == 55 { printf(c"u16\n");  return; }
+    if k == 56 { printf(c"i64\n");  return; }
+    if k == 57 { printf(c"u64\n");  return; }
+    if k == 58 { printf(c"f32\n");  return; }
+    if k == 59 { printf(c"f64\n");  return; }
+    if k == 60 { printf(c"bool\n"); return; }
+    if k == 61 { printf(c"char\n"); return; }
+    if k == 62 { printf(c"str\n");  return; }
+    if k == 63 { printf(c"cstr\n"); return; }
+    if k == 64 { printf(c"void\n"); return; }
+    if k == 65 { printf(c"any\n");  return; }
+    // Punctuation
+    if k == 200 { printf(c"(\n");  return; }
+    if k == 201 { printf(c")\n");  return; }
+    if k == 202 { printf(c"{\n");  return; }
+    if k == 203 { printf(c"}\n");  return; }
+    if k == 204 { printf(c"[\n");  return; }
+    if k == 205 { printf(c"]\n");  return; }
+    if k == 206 { printf(c",\n");  return; }
+    if k == 207 { printf(c";\n");  return; }
+    if k == 208 { printf(c".\n");  return; }
+    if k == 209 { printf(c"#\n");  return; }
+    if k == 210 { printf(c"@\n");  return; }
+    if k == 211 { printf(c"~\n");  return; }
+    if k == 212 { printf(c"^\n");  return; }
+    // Operators
+    if k == 213 { printf(c"+\n");  return; }
+    if k == 214 { printf(c"-\n");  return; }
+    if k == 215 { printf(c"*\n");  return; }
+    if k == 216 { printf(c"/\n");  return; }
+    if k == 217 { printf(c"%%\n"); return; }
+    if k == 218 { printf(c"&\n");  return; }
+    if k == 219 { printf(c"|\n");  return; }
+    if k == 220 { printf(c"!\n");  return; }
+    if k == 221 { printf(c"<\n");  return; }
+    if k == 222 { printf(c">\n");  return; }
+    if k == 223 { printf(c"=\n");  return; }
+    if k == 224 { printf(c"?\n");  return; }
+    if k == 225 { printf(c":\n");  return; }
+    if k == 226 { printf(c"::\n"); return; }
+    if k == 227 { printf(c"..\n"); return; }
+    if k == 228 { printf(c"..=\n"); return; }
+    if k == 229 { printf(c"==\n"); return; }
+    if k == 230 { printf(c"!=\n"); return; }
+    if k == 231 { printf(c"<=\n"); return; }
+    if k == 232 { printf(c">=\n"); return; }
+    if k == 233 { printf(c"=>\n"); return; }
+    if k == 234 { printf(c"+=\n"); return; }
+    if k == 235 { printf(c"-=\n"); return; }
+    if k == 236 { printf(c"*=\n"); return; }
+    if k == 237 { printf(c"/=\n"); return; }
+    if k == 238 { printf(c"++\n"); return; }
+    if k == 239 { printf(c"--\n"); return; }
+    if k == 240 { printf(c"&&\n"); return; }
+    if k == 241 { printf(c"||\n"); return; }
+    if k == 242 { printf(c"<<\n"); return; }
+    if k == 243 { printf(c">>\n"); return; }
+    if k == 244 { printf(c"->\n"); return; }
+    printf(c"kind=%d\n", k);
+}

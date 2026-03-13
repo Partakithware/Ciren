@@ -1,0 +1,37 @@
+using stdio;
+
+public struct Vec2 {
+    x: f64,
+    y: f64,
+}
+
+public struct Rect {
+    origin: Vec2,
+    width: f64,
+    height: f64,
+}
+
+private f64 vec2_dot(a: Vec2, b: Vec2) {
+    return a.x * b.x + a.y * b.y;
+}
+
+private f64 rect_area(r: Rect) {
+    return r.width * r.height;
+}
+
+public main() {
+    let v = Vec2 { x: 3.0, y: 4.0 };
+    printf(c"v.x = %f\n", v.x);
+    printf(c"v.y = %f\n", v.y);
+
+    let a = Vec2 { x: 1.0, y: 0.0 };
+    let b = Vec2 { x: 0.0, y: 1.0 };
+    let d = vec2_dot(a, b);
+    printf(c"dot = %f\n", d);
+
+    let r = Rect { origin: Vec2 { x: 0.0, y: 0.0 }, width: 10.0, height: 5.0 };
+    let area = rect_area(r);
+    printf(c"area = %f\n", area);
+
+    return 0;
+}

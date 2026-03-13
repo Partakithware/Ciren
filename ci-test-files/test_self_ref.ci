@@ -1,0 +1,16 @@
+using stdio;
+using memory;
+
+public struct AstNode {
+    kind: int,
+    left: *AstNode,
+    right: *AstNode,
+}
+
+public main() {
+    let a: AstNode = AstNode { kind: 1, left: null, right: null };
+    let b: AstNode = AstNode { kind: 2, left: &a, right: null };
+    printf(c"b.kind = %d\n", b.kind);
+    printf(c"b.left.kind = %d\n", (*b.left).kind);
+    return 0;
+}

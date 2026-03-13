@@ -1,0 +1,4 @@
+module testconst2;
+public const A: int = 0;
+public const B: int = 1;
+public const C: int = 2;

@@ -1,0 +1,66 @@
+using stdio;
+using memory;
+using lexer;
+
+public *int fill_buf() {
+    let s: *int = malloc(256) as *int;
+    *(s+0)=112;
+    *(s+1)=117;
+    *(s+2)=98;
+    *(s+3)=108;
+    *(s+4)=105;
+    *(s+5)=99;
+    *(s+6)=32;
+    *(s+7)=109;
+    *(s+8)=97;
+    *(s+9)=105;
+    *(s+10)=110;
+    *(s+11)=40;
+    *(s+12)=41;
+    *(s+13)=32;
+    *(s+14)=123;
+    *(s+15)=32;
+    *(s+16)=114;
+    *(s+17)=101;
+    *(s+18)=116;
+    *(s+19)=117;
+    *(s+20)=114;
+    *(s+21)=110;
+    *(s+22)=32;
+    *(s+23)=48;
+    *(s+24)=59;
+    *(s+25)=32;
+    *(s+26)=125;
+    *(s+27)=0;
+    return s;
+}
+
+public main() {
+    let code: *int = fill_buf();
+    let l: Lexer = Lexer { source: code, current: code, start: code, line: 1, col: 1 };
+    let lp: *Lexer = &l;
+
+    let tok: Token = lexer_next(lp);
+    printf(c"kind=%d len=%d\n", tok.kind, tok.length);
+    tok = lexer_next(lp);
+    printf(c"kind=%d len=%d\n", tok.kind, tok.length);
+    tok = lexer_next(lp);
+    printf(c"kind=%d\n", tok.kind);
+    tok = lexer_next(lp);
+    printf(c"kind=%d\n", tok.kind);
+    tok = lexer_next(lp);
+    printf(c"kind=%d\n", tok.kind);
+    tok = lexer_next(lp);
+    printf(c"kind=%d len=%d\n", tok.kind, tok.length);
+    tok = lexer_next(lp);
+    printf(c"kind=%d len=%d\n", tok.kind, tok.length);
+    tok = lexer_next(lp);
+    printf(c"kind=%d\n", tok.kind);
+    tok = lexer_next(lp);
+    printf(c"kind=%d\n", tok.kind);
+    tok = lexer_next(lp);
+    printf(c"kind=%d\n", tok.kind);
+
+    free(code);
+    return 0;
+}

@@ -1,0 +1,16 @@
+using stdio;
+using memory;
+using lexer;
+
+public main() {
+    let buf: *int = malloc(64) as *int;
+    let code: *int = buf;
+    *code = 104; code = code + 1;
+    *code = 0;
+    let l: Lexer = Lexer { src: buf, pos: 0, len: 1 };
+    let lp: *Lexer = &l;
+    let tok: Token = lexer_next(lp);
+    printf(c"kind=%d\n", tok.kind);
+    free(buf);
+    return 0;
+}

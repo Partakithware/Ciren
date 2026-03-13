@@ -1,0 +1,22 @@
+module strings;
+using stdio;
+using string;
+
+public int len(s: str) {
+    return strlen(s.ptr) as int;
+}
+
+public bool eq(a: str, b: str) {
+    return strcmp(a.ptr, b.ptr) == 0;
+}
+
+public bool starts_with(s: str, prefix: str) {
+    let plen: int = strlen(prefix.ptr) as int;
+    let slen: int = strlen(s.ptr) as int;
+    if plen > slen { return false; }
+    return strncmp(s.ptr, prefix.ptr, plen as i64) == 0;
+}
+
+public void println(s: str) {
+    printf(c"%s\n", s.ptr);
+}

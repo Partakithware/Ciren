@@ -1,0 +1,9 @@
+using stdio;
+using memory;
+using ast;
+
+public main() {
+    printf(c"NK_FUNC_DECL=%d\n", NK_FUNC_DECL);
+    printf(c"NK_BLOCK=%d\n", NK_BLOCK);
+    return 0;
+}

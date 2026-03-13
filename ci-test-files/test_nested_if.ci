@@ -1,0 +1,33 @@
+using stdio;
+
+public main() {
+    let x: int = 2;
+
+    // Test: else if inside else if
+    if x == 1 {
+        printf(c"one\n");
+    } else if x == 2 {
+        if x == 2 {
+            printf(c"two-inner\n");
+        } else if x == 3 {
+            printf(c"three\n");
+        } else {
+            printf(c"other-inner\n");
+        }
+    } else {
+        printf(c"other\n");
+    }
+
+    // Test: chained else if
+    if x == 1 {
+        printf(c"a\n");
+    } else if x == 2 {
+        printf(c"b\n");
+    } else if x == 3 {
+        printf(c"c\n");
+    } else {
+        printf(c"d\n");
+    }
+
+    return 0;
+}

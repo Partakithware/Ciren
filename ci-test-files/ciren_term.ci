@@ -1,0 +1,76 @@
+using stdio;
+using gtk;
+using memory;
+using vte;
+
+public struct AppState {
+    term: *int,
+    win: *int,
+    entry: *int,
+}
+
+// Sends whatever you type in the HeaderBar Entry directly to the shell
+private void on_command_sent(entry: *int, state: *AppState) {
+
+    // Explicitly cast the return of the GTK call to cstr
+    let text: cstr = gtk_entry_get_text(entry) as cstr;
+    
+    // Feed the command + Enter key to the terminal
+    vte_terminal_feed((*state).term, text, -1);
+    vte_terminal_feed((*state).term, c"\r\n", 2);
+    
+    // Clear the entry for the next command
+    gtk_entry_set_text(entry, c"");
+}
+
+private void on_activate(app: *int, user_data: *int) {
+    let state: *AppState = malloc(24 as i64) as *AppState;
+    
+    let win: *int = gtk_application_window_new(app) as *int;
+    (*state).win = win;
+    gtk_window_set_title(win, c"Ciren Pro Terminal");
+    gtk_window_set_default_size(win, 1000, 650);
+
+    // --- Modern Header Bar ---
+    let header: *int = gtk_header_bar_new() as *int;
+    gtk_header_bar_set_show_close_button(header, 1);
+    gtk_window_set_titlebar(win, header);
+
+    // Command Entry Box in the Header
+    let entry: *int = gtk_entry_new() as *int;
+    (*state).entry = entry;
+    gtk_entry_set_placeholder_text(entry, c"Run Ciren command...");
+    gtk_header_bar_pack_end(header, entry);
+
+    // --- Terminal Engine ---
+    let term: *int = vte_terminal_new() as *int;
+    (*state).term = term;
+
+    // The magic: Spawning a real bash process
+    // Using simple argv logic that worked in your previous tests
+    let argv: **int = malloc(16 as i64) as **int;
+    *argv = c"/bin/bash" as *int;
+    *(argv + 1) = 0 as *int;
+
+    // vte_terminal_spawn_sync is more stable for codegen than the async variants
+    vte_terminal_spawn_sync(
+        term, 0, 0 as cstr, argv, 0 as **int, 0, 0 as *int, 0 as *int, 0 as *int, 0 as *int, 0 as *int
+    );
+
+    // Styling
+    let provider: *int = gtk_css_provider_new() as *int;
+    gtk_css_provider_load_from_data(provider, c"vte-terminal { background-color: #000; color: #0f0; font-family: 'Monospace'; }", -1, 0 as *int);
+    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), provider, 800);
+
+    // Signal: Pressing 'Enter' in the entry box sends the command
+    g_signal_connect_data(entry, c"activate", on_command_sent as *int, state as *int, 0 as *int, 0);
+
+    gtk_container_add(win, term);
+    gtk_widget_show_all(win);
+}
+
+public main() {
+    let app: *int = gtk_application_new(c"org.ciren.terminal.pro", 0) as *int;
+    g_signal_connect_data(app, c"activate", on_activate as *int, 0 as *int, 0 as *int, 0);
+    return g_application_run(app, 0, 0 as **int) as int;
+}

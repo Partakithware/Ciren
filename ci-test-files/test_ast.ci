@@ -1,0 +1,12 @@
+using stdio;
+using memory;
+using ast;
+
+public main() {
+    let a: *Arena = arena_create(1024 * 1024);
+    let n: *AstNode = node_alloc(a, NK_FUNC_DECL, 1, 1);
+    printf(c"kind = %d\n", (*n).kind);
+    printf(c"NK_FUNC_DECL = %d\n", NK_FUNC_DECL);
+    ast_print(n, 0);
+    return 0;
+}

@@ -1,0 +1,30 @@
+using stdio;
+using raylib;
+
+public main() {
+    InitWindow(800, 450, c"Ciren Pro: 3D Movement");
+    SetTargetFPS(60);
+
+    let x: int = 0;
+    let y: int = 0;
+    let speed: int = 2;
+
+    while (WindowShouldClose() == 0) {
+        // Simple logic check: update coordinates
+        x = x + speed;
+        if (x > 700) { speed = -2; }
+        if (x < 0) { speed = 2; }
+
+        BeginDrawing();
+        ClearBackground(GetColor(0x181818FF)); // Verified Hex!
+
+        // Draw a moving rectangle and a 3D-ish shadow
+        DrawRectangle(x, 200, 100, 100, GetColor(0x00FF41FF));
+        DrawText(c"Ciren: Total Control", 10, 10, 20, GetColor(0xFFFFFFFF));
+        
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
+}

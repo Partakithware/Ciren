@@ -1,0 +1,33 @@
+using stdio;
+using raylib;
+using input;
+
+public main() {
+    InitWindow(800, 450, c"Ciren: Native Input Module");
+    SetTargetFPS(60);
+
+    let input_state: InputState;
+    // Common event for keyboards on laptops; might need sudo to read!
+    init_input(&input_state, c"/dev/input/event3"); 
+
+    let x: int = 400;
+    let y: int = 225;
+
+    while (WindowShouldClose() == 0) {
+        update_input(&input_state);
+
+        // Linux Keycodes: A=30, D=32, W=17, S=31
+        if (is_pressed(&input_state, 32) == 1) { x = x + 5; }
+        if (is_pressed(&input_state, 30) == 1) { x = x - 5; }
+        if (is_pressed(&input_state, 31) == 1) { y = y + 5; }
+        if (is_pressed(&input_state, 17) == 1) { y = y - 5; }
+
+        BeginDrawing();
+        ClearBackground(GetColor(0x181818FF));
+        DrawRectangle(x, y, 50, 50, GetColor(0x00FF41FF));
+        EndDrawing();
+    }
+
+    CloseWindow();
+    return 0;
+}

@@ -1,0 +1,6 @@
+using stdio;
+
+public main() {
+    let x: int = c"this is wrong";
+    return 0;
+}

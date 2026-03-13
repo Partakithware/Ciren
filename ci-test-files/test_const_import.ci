@@ -1,0 +1,7 @@
+using stdio;
+using testconst;
+
+public main() {
+    printf(c"ZERO=%d ONE=%d TWO=%d\n", ZERO, ONE, TWO);
+    return 0;
+}

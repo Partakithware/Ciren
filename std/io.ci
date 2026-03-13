@@ -1,0 +1,14 @@
+module io;
+using stdio;
+
+public void println(s: str) {
+    printf(c"%s\n", s);
+}
+
+public void println_int(n: int) {
+    printf(c"%d\n", n);
+}
+
+public void println_float(f: f64) {
+    printf(c"%f\n", f);
+}

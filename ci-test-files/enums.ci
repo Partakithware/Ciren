@@ -1,0 +1,49 @@
+using stdio;
+
+public enum Shape {
+    Circle(radius: f64),
+    Rect(width: f64, height: f64),
+    Point,
+}
+
+public enum Result {
+    Ok(value: int),
+    Err(msg: str),
+}
+
+private f64 shape_area(s: Shape) {
+    match s {
+        Shape::Circle(r) => { return r * r * 3.14159; },
+        Shape::Rect(w, h) => { return w * h; },
+        Shape::Point => { return 0.0; },
+    }
+}
+
+private Result divide(a: int, b: int) {
+    if b == 0 {
+        return Result::Err("division by zero");
+    }
+    return Result::Ok(a / b);
+}
+
+public main() {
+    let c = Shape::Circle(5.0);
+    let r = Shape::Rect(4.0, 3.0);
+    let p = Shape::Point;
+
+    printf(c"circle area = %f\n", shape_area(c));
+    printf(c"rect area   = %f\n", shape_area(r));
+    printf(c"point area  = %f\n", shape_area(p));
+
+    match divide(10, 2) {
+        Result::Ok(v)  => { printf(c"10/2 = %d\n", v); },
+        Result::Err(e) => { printf(c"err: %s\n", e.ptr); },
+    }
+
+    match divide(10, 0) {
+        Result::Ok(v)  => { printf(c"10/0 = %d\n", v); },
+        Result::Err(e) => { printf(c"err: %s\n", e.ptr); },
+    }
+
+    return 0;
+}

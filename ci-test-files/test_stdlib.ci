@@ -1,0 +1,20 @@
+using stdio;
+using strings;
+using mem;
+
+public main() {
+    let s: str = "Hello, Ciren!";
+    println(s);
+    printf(c"len = %d\n", len(s));
+    printf(c"eq  = %d\n", eq(s, "Hello, Ciren!") as int);
+    printf(c"eq2 = %d\n", eq(s, "goodbye") as int);
+    printf(c"sw  = %d\n", starts_with(s, "Hello") as int);
+
+    let arr: *int = alloc_ints(5);
+    zero(arr, 20);
+    *arr = 10;
+    printf(c"arr[0] = %d\n", *arr);
+    dealloc(arr);
+
+    return 0;
+}

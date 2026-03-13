@@ -1,0 +1,40 @@
+using stdio;
+
+private Result<int, str> divide(a: int, b: int) {
+    if b == 0 {
+        return Err("division by zero");
+    }
+    return Ok(a / b);
+}
+
+private Result<int, str> double_divide(a: int, b: int, c: int) {
+    let x = divide(a, b)?;
+    let y = divide(x, c)?;
+    return Ok(y);
+}
+
+public main() {
+    // Direct match
+    match divide(10, 2) {
+        Ok(v)  => printf(c"10/2 = %d\n", v),
+        Err(e) => printf(c"error: %s\n", e),
+    }
+
+    match divide(10, 0) {
+        Ok(v)  => printf(c"10/0 = %d\n", v),
+        Err(e) => printf(c"error: %s\n", e),
+    }
+
+    // ? propagation
+    match double_divide(100, 5, 4) {
+        Ok(v)  => printf(c"100/5/4 = %d\n", v),
+        Err(e) => printf(c"error: %s\n", e),
+    }
+
+    match double_divide(100, 0, 4) {
+        Ok(v)  => printf(c"100/0/4 = %d\n", v),
+        Err(e) => printf(c"error: %s\n", e),
+    }
+
+    return 0;
+}

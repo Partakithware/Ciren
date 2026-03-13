@@ -1,0 +1,9 @@
+using stdio;
+using io;
+
+public main() {
+    println("Hello from Ciren module!");
+    println_int(42);
+    println_float(3.14);
+    return 0;
+}

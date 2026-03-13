@@ -1,0 +1,15 @@
+using stdio;
+using memory;
+
+public struct FuncData {
+    name: *int,
+    param_count: int,
+}
+
+public main() {
+    let fd: FuncData = FuncData { name: null, param_count: 3 };
+    let raw: *int = &fd as *int;
+    let back: *FuncData = raw as *FuncData;
+    printf(c"param_count = %d\n", (*back).param_count);
+    return 0;
+}

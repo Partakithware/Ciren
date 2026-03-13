@@ -1,0 +1,5 @@
+module testconst;
+
+public const ZERO: int = 0;
+public const ONE: int = 1;
+public const TWO: int = 2;

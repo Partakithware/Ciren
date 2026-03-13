@@ -1,0 +1,43 @@
+using stdio;
+
+interface Drawable {
+    fn area(self: Self) -> f64;
+    fn name(self: Self) -> str;
+}
+
+public struct Circle {
+    radius: f64,
+}
+
+public struct Rect {
+    width: f64,
+    height: f64,
+}
+
+impl Drawable for Circle {
+    fn area(self: Circle) -> f64 {
+        return 3.14159265 * self.radius * self.radius;
+    }
+    fn name(self: Circle) -> str {
+        return "circle";
+    }
+}
+
+impl Drawable for Rect {
+    fn area(self: Rect) -> f64 {
+        return self.width * self.height;
+    }
+    fn name(self: Rect) -> str {
+        return "rect";
+    }
+}
+
+public main() {
+    let c = Circle { radius: 5.0 };
+    let r = Rect { width: 4.0, height: 3.0 };
+
+    printf(c"%s area = %f\n", c.name(), c.area());
+    printf(c"%s area = %f\n", r.name(), r.area());
+
+    return 0;
+}

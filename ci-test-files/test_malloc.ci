@@ -1,0 +1,9 @@
+using stdio;
+using memory;
+
+public main() {
+    let p: *int = malloc(64) as *int;
+    printf(c"ok\n");
+    free(p);
+    return 0;
+}

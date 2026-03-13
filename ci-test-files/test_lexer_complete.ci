@@ -1,0 +1,77 @@
+using stdio;
+using memory;
+using lexer;
+
+public *int fill_buf() {
+    let s: *int = malloc(512) as *int;
+    // "let x: i64 = 42 + 3.14; // comment"
+    // l=108 e=101 t=116 space=32 x=120 :=58 space=32 i=105 6=54 4=52
+    // space=32 ==61 space=32 4=52 2=50 space=32 +=43 space=32
+    // 3=51 .=46 1=49 4=52 ;=59 space=32 /=47 /=47 space=32 rest
+    *(s+0)=108;  *(s+1)=101;  *(s+2)=116;  *(s+3)=32;
+    *(s+4)=120;  *(s+5)=58;   *(s+6)=32;   *(s+7)=105;
+    *(s+8)=54;   *(s+9)=52;   *(s+10)=32;  *(s+11)=61;
+    *(s+12)=32;  *(s+13)=52;  *(s+14)=50;  *(s+15)=32;
+    *(s+16)=43;  *(s+17)=32;  *(s+18)=51;  *(s+19)=46;
+    *(s+20)=49;  *(s+21)=52;  *(s+22)=59;  *(s+23)=32;
+    *(s+24)=47;  *(s+25)=47;  *(s+26)=32;  *(s+27)=99;
+    *(s+28)=111; *(s+29)=109; *(s+30)=109; *(s+31)=101;
+    *(s+32)=110; *(s+33)=116; *(s+34)=10;
+    // "x += 1; x++; x--;"
+    *(s+35)=120; *(s+36)=32;  *(s+37)=43;  *(s+38)=61;
+    *(s+39)=32;  *(s+40)=49;  *(s+41)=59;  *(s+42)=32;
+    *(s+43)=120; *(s+44)=43;  *(s+45)=43;  *(s+46)=59;
+    *(s+47)=32;  *(s+48)=120; *(s+49)=45;  *(s+50)=45;
+    *(s+51)=59;  *(s+52)=0;
+    return s;
+}
+
+public main() {
+    let code: *int = fill_buf();
+    let l: Lexer = Lexer { source: code, current: code, start: code, line: 1, col: 1 };
+    let lp: *Lexer = &l;
+
+    let tok: Token = lexer_next(lp);
+    token_print(tok);   // let
+    tok = lexer_next(lp);
+    token_print(tok);   // x (ident)
+    tok = lexer_next(lp);
+    token_print(tok);   // :
+    tok = lexer_next(lp);
+    token_print(tok);   // i64
+    tok = lexer_next(lp);
+    token_print(tok);   // =
+    tok = lexer_next(lp);
+    token_print(tok);   // 42 (int)
+    tok = lexer_next(lp);
+    token_print(tok);   // +
+    tok = lexer_next(lp);
+    token_print(tok);   // 3.14 (float)
+    tok = lexer_next(lp);
+    token_print(tok);   // ;
+    tok = lexer_next(lp);
+    token_print(tok);   // x (comment skipped)
+    tok = lexer_next(lp);
+    token_print(tok);   // +=
+    tok = lexer_next(lp);
+    token_print(tok);   // 1
+    tok = lexer_next(lp);
+    token_print(tok);   // ;
+    tok = lexer_next(lp);
+    token_print(tok);   // x
+    tok = lexer_next(lp);
+    token_print(tok);   // ++
+    tok = lexer_next(lp);
+    token_print(tok);   // ;
+    tok = lexer_next(lp);
+    token_print(tok);   // x
+    tok = lexer_next(lp);
+    token_print(tok);   // --
+    tok = lexer_next(lp);
+    token_print(tok);   // ;
+    tok = lexer_next(lp);
+    token_print(tok);   // EOF
+
+    free(code);
+    return 0;
+}

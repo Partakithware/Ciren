@@ -1,0 +1,10 @@
+using stdio;
+
+private void greet(name: str) {
+    printf(c"Hello, %s!\n", name.ptr);
+}
+
+public main() {
+    greet("Ciren");
+    return 0;
+}
