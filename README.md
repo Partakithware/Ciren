@@ -5,7 +5,7 @@ A statically typed, compiled systems language with C interop, generics, interfac
 ## Side Note:
 I am only a coding hobbyist, so there are likely flaws and various features that could be improved. I invite anyone that can and may know better to pitch in. It would be very appreciated.
 There are many things that need adjustments and minor fixes or simply just updated functionality. I decided to post it now as it gets further out of the range of what I feel I can accomplish alone.
-As always my documentation is not where it should be, so I apologize for that. I would just like to see Ciren swim along and manage to become something more! I would not describe it's style as 'new' but more like an adapted C style of sorts (in my opinion). Test files have been uploaded for viewing and use, many may not be relevant but are there anyways.   
+As always my documentation is not where it should be, so I apologize for that. I would just like to see Ciren swim along and manage to become something more! I would not describe it's style as 'new' but more like an adapted C style of sorts (in my opinion). Test files have been uploaded for viewing and use, many may not be relevant but are there anyways. I let ai write the portion of the readme below this, because I did not properly document while I was coding..., it has not been double-checked that it matches .ci, so some of the way it references code might be false, the feature is likely there but the way it does such may be faulty, please let me know ASAP if this is found to be the case. I will begin checking tomorrow.    
 
 ---
 
